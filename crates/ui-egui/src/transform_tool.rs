@@ -69,6 +69,12 @@ pub struct TransformPreview {
     tool: Tool,
     /// Free Transform Path: the path as it was, drawn through the box instead of pixels.
     path: Option<photocraft_doc::vector::Path>,
+    /// Preview the layer transformed at its place in the stack ([`display_doc`]) rather than
+    /// drawing the moving pixels over everything: set when that would misrepresent the result.
+    in_stack: bool,
+    /// The last in-stack preview: (box key, the document with the layer transformed, or `None`
+    /// when the engine can't preview this box and the overlay stands in).
+    stacked: Option<(u64, Option<Arc<Document>>)>,
 }
 
 /// Grab radius of the box's handles, in screen points. Generous, so a corner is easy to catch;
@@ -186,6 +192,8 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
         steps: Steps::default(),
         tool: app.ui.tool,
         path: None,
+        in_stack: needs_in_stack(&doc, id),
+        stacked: None,
     });
     app.ui.transform = Some(TransformSession {
         session,
@@ -322,6 +330,8 @@ fn begin_lone(
         steps: Steps::default(),
         tool: app.ui.tool,
         path: None,
+        in_stack: false,
+        stacked: None,
     });
     app.ui.transform = Some(TransformSession {
         session,
@@ -368,6 +378,8 @@ fn begin_path(app: &mut PhotocraftApp, ctx: &egui::Context, params: serde_json::
         steps: Steps::default(),
         tool: app.ui.tool,
         path: Some(path),
+        in_stack: false,
+        stacked: None,
     });
     app.ui.transform = Some(TransformSession {
         session,
@@ -446,6 +458,8 @@ pub fn begin_selection(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(
         steps: Steps::default(),
         tool: app.ui.tool,
         path: None,
+        in_stack: false,
+        stacked: None,
     });
     app.ui.transform = Some(TransformSession {
         session,
@@ -578,6 +592,75 @@ fn preview_mask(l: &photocraft_doc::Layer, b: photocraft_geom::Rect) -> Option<c
 
 fn contains(l: &photocraft_doc::Layer, id: LayerId) -> bool {
     l.id == id || matches!(&l.content, LayerContent::Group(g) if g.children.iter().any(|c| contains(c, id)))
+}
+
+/// Whether drawing the moving pixels over the whole canvas would misrepresent the result: a visible
+/// layer above covers it, it sits in a group, or its blend mode or effects change how it
+/// composites. Then the preview transforms the layer where it is in the stack ([`display_doc`]).
+fn needs_in_stack(doc: &Document, id: LayerId) -> bool {
+    let (Some(path), Some(l)) = (doc.path_of(id), doc.layer(id)) else { return false };
+    let [top] = path.as_slice() else { return true };
+    l.is_group()
+        || l.blend != photocraft_doc::BlendMode::Normal
+        || (l.effects.enabled && !l.effects.items.is_empty())
+        || doc.layers.get(top.saturating_add(1)..).is_some_and(|above| above.iter().any(|a| a.visible))
+}
+
+/// The box's interpolation while previewing: bilinear during a drag (the chosen method on release),
+/// so dragging a big layer stays smooth.
+fn preview_interpolation(t: &TransformSession, pv: &TransformPreview) -> &'static str {
+    match t.interpolation.as_str() {
+        "nearest" | "nearestNeighbor" => "nearest",
+        _ if pv.gesture.is_some() => "bilinear",
+        "bilinear" => "bilinear",
+        _ => "bicubic",
+    }
+}
+
+fn stack_key(t: &TransformSession, interpolation: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    t.session.hash(&mut h);
+    t.rect.iter().chain(t.quad.iter().flatten()).for_each(|v| v.to_bits().hash(&mut h));
+    interpolation.hash(&mut h);
+    h.finish() | 1 << 42
+}
+
+/// The document as shown while the box is up: the layer transformed at its place in the stack, so
+/// layers above still cover it and its blend mode and effects apply as they will after the commit.
+/// `None` for the overlay preview (a plain top layer, selections, paths, warps, channel targets).
+pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u64)> {
+    let (Some(t), Some(pv)) = (&app.ui.transform, app.transform_preview.as_mut()) else { return None };
+    if !pv.in_stack || t.warp.is_some() || t.selection || t.path.is_some() || t.target.is_some() || app.session.active_index() != Some(idx) {
+        return None;
+    }
+    let st = app.session.documents().get(idx)?;
+    let id = LayerId(t.layer);
+    if pv.doc.id != st.doc.id || st.doc.layer(id).is_none() {
+        return None;
+    }
+    let interpolation = preview_interpolation(t, pv);
+    let key = stack_key(t, interpolation);
+    if pv.stacked.as_ref().is_none_or(|(k, _)| *k != key) {
+        let t0 = crate::gpu_canvas::now_ms();
+        let shown = if t.quad == corners(t.rect) {
+            Some(st.doc.clone())
+        } else {
+            photocraft_engine::transform_cmds::transformed(&st.doc, id, t.rect, t.quad, interpolation)
+                .ok()
+                .map(|d| Arc::new(photocraft_engine::mode_cmds::display_document(&d).unwrap_or(d)))
+        };
+        pv.stacked = Some((key, shown));
+        app.perf.span("transform preview", crate::gpu_canvas::now_ms() - t0);
+    }
+    let shown = app.transform_preview.as_ref()?.stacked.as_ref()?.1.clone()?;
+    Some((shown, key))
+}
+
+/// Whether the canvas shows the current box in place ([`display_doc`]), so the overlay draws only
+/// the box and handles.
+fn shown_in_stack(t: &TransformSession, pv: &TransformPreview) -> bool {
+    pv.in_stack && pv.stacked.as_ref().is_some_and(|(k, d)| d.is_some() && *k == stack_key(t, preview_interpolation(t, pv)))
 }
 
 pub fn commit(app: &mut PhotocraftApp) {
@@ -1336,7 +1419,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         draw_warp(painter, xf, t, w, pv, guide);
         return;
     }
-    if let Some(h) = Homography::rect_to_quad([0.0, 0.0, 1.0, 1.0], t.quad) {
+    if let Some(h) = Homography::rect_to_quad([0.0, 0.0, 1.0, 1.0], t.quad).filter(|_| !shown_in_stack(t, pv)) {
         // A 24×24 grid keeps perspective previews straight.
         let n = 24;
         let (tex, uv) = pv.texture.pick(painter.ctx(), xf.zoom * painter.ctx().pixels_per_point(), quad_scale(t), t.interpolation == "nearest");
@@ -1854,6 +1937,47 @@ mod tests {
             made: None,
             mode: Default::default(),
         }
+    }
+
+    /// A layer under another one previews where it is in the stack: the layer above still covers
+    /// it, and the overlay draws only the box. A plain top layer keeps the fast overlay.
+    #[test]
+    fn covered_layer_previews_in_stack() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("select.rect", json!({"x": 100, "y": 100, "width": 100, "height": 60})).unwrap();
+        app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        app.run("select.deselect", json!({})).unwrap();
+        let below = app.session.active().unwrap().active_layer.unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("edit.fill", json!({"color": "#0000ff"})).unwrap();
+        let above = app.session.active().unwrap().active_layer.unwrap();
+        app.run("layer.select", json!({"layer": below.0})).unwrap();
+        app.sync_views();
+        let ctx = egui::Context::default();
+        begin(&mut app, &ctx).unwrap();
+        assert!(app.transform_preview.as_ref().unwrap().in_stack);
+        let t = app.ui.transform.as_mut().unwrap();
+        t.quad = t.quad.map(|[x, y]| [x + 50.0, y]);
+
+        let (shown, _) = display_doc(&mut app, 0).expect("a covered layer previews in place");
+        let b = shown.layer(below).unwrap().surface().unwrap().content_bounds();
+        assert_eq!((b.x0, b.x1), (150, 250));
+        let order: Vec<_> = shown.layers.iter().map(|l| l.id).collect();
+        assert!(order.iter().position(|id| *id == below) < order.iter().position(|id| *id == above), "the layer stays below");
+        assert!(shown.layer(above).unwrap().visible);
+        let (t, pv) = (app.ui.transform.as_ref().unwrap(), app.transform_preview.as_ref().unwrap());
+        assert!(shown_in_stack(t, pv), "the overlay draws only the box");
+        assert_eq!(app.session.active().unwrap().doc.layer(below).unwrap().surface().unwrap().content_bounds().x0, 100, "nothing committed yet");
+
+        let doc = app.session.active().unwrap().doc.clone();
+        assert!(!needs_in_stack(&doc, above), "a plain top layer keeps the overlay");
+        let mut hidden = (*doc).clone();
+        hidden.layer_mut(above).unwrap().visible = false;
+        assert!(!needs_in_stack(&hidden, below), "a hidden layer above covers nothing");
+        hidden.layer_mut(below).unwrap().blend = photocraft_doc::BlendMode::Multiply;
+        assert!(needs_in_stack(&hidden, below), "a blend mode previews in place");
     }
 
     #[test]

@@ -35,6 +35,47 @@ pub fn has_effects(layer: &Layer) -> bool {
     layer.effects.enabled && layer.effects.items.iter().any(Effect::enabled)
 }
 
+/// An effect kind's place in Photoshop's fixed stack, bottom first.
+fn stack_rank(e: &Effect) -> u8 {
+    match e {
+        Effect::DropShadow(_) => 0,
+        Effect::OuterGlow(_) => 1,
+        Effect::PatternOverlay { .. } => 2,
+        Effect::GradientOverlay { .. } => 3,
+        Effect::ColorOverlay { .. } => 4,
+        Effect::Satin(_) => 5,
+        Effect::InnerGlow(_) => 6,
+        Effect::InnerShadow(_) => 7,
+        Effect::Stroke(_) => 8,
+        Effect::BevelEmboss(_) => 9,
+    }
+}
+
+/// `items` (the enabled effects, in list order) as (index, effect) in paint order, bottom first.
+/// Photoshop's order goes by kind (see the module docs), the first listed instance of a kind on
+/// top. With `custom` (`Effects::custom_order`, PhotoCraft's reorderable stack) it is the list
+/// read upwards: the first listed is painted last. Exterior effects still lie beneath the layer
+/// and interior ones on it; custom order changes how each side stacks. The list in Photoshop's
+/// order (the Layer Style dialog's) paints the same either way.
+pub fn paint_order<'a>(items: &[&'a Effect], custom: bool) -> Vec<(usize, &'a Effect)> {
+    let mut order: Vec<(usize, &Effect)> = items.iter().copied().enumerate().rev().collect();
+    if !custom {
+        order.sort_by_key(|(_, e)| stack_rank(e));
+    }
+    order
+}
+
+/// Painted on the layer after the interior group (Blend Interior Effects as Group's fill applies
+/// beneath it): inner shadows, strokes and inner bevels.
+fn above_interior_group(e: &Effect) -> bool {
+    stack_rank(e) >= 7
+}
+
+/// Painted on the layer above a shape's own vector stroke: strokes and inner bevels.
+pub fn above_vector_stroke(e: &Effect) -> bool {
+    stack_rank(e) >= 8
+}
+
 /// Pixels an effect stack can reach beyond the layer's shape.
 pub fn margin(layer: &Layer) -> i32 {
     let mut m = 0.0f32;
@@ -1624,26 +1665,28 @@ pub(crate) fn composite_with_effects_prepared(
     let vector_shape = matches!(layer.content, photocraft_doc::LayerContent::Shape(_));
     // Multiple instances: the first listed is on top, so paint in reverse.
     let rev = || items.iter().copied().enumerate().rev();
+    let order = paint_order(&items, layer.effects.custom_order);
 
-    for (i, e) in rev() {
-        if let Effect::DropShadow(s) = e {
-            let mut m = fx(i, 0);
-            if s.knocks_out {
-                // The layer hides the shadow beneath it only where its fill is see-through: at
-                // 100 % fill the layer covers it anyway (and anti-aliased edges are not
-                // attenuated twice), at 0 % the shape shows the bare backdrop.
-                knock_out_exterior(&mut m, &shape, layer.fill_opacity);
+    for &(i, e) in &order {
+        match e {
+            Effect::DropShadow(s) => {
+                let mut m = fx(i, 0);
+                if s.knocks_out {
+                    // The layer hides the shadow beneath it only where its fill is see-through: at
+                    // 100 % fill the layer covers it anyway (and anti-aliased edges are not
+                    // attenuated twice), at 0 % the shape shows the bare backdrop.
+                    knock_out_exterior(&mut m, &shape, layer.fill_opacity);
+                }
+                paint_color(&mut work, &m, rgb(&s.color), s.common.blend, s.common.opacity);
             }
-            paint_color(&mut work, &m, rgb(&s.color), s.common.blend, s.common.opacity);
-        }
-    }
-    for (i, e) in rev() {
-        if let Effect::OuterGlow(g) = e {
-            let mut m = fx(i, 0);
-            // The glow is behind the shape, not painted across its interior when Fill is 0 %.
-            // Preserve the existing anti-aliased edge when the fill is fully opaque.
-            knock_out_exterior(&mut m, &shape, layer.fill_opacity);
-            paint_glow(&mut work, &m, g, sb, anchor, big, patterns);
+            Effect::OuterGlow(g) => {
+                let mut m = fx(i, 0);
+                // The glow is behind the shape, not painted across its interior when Fill is 0 %.
+                // Preserve the existing anti-aliased edge when the fill is fully opaque.
+                knock_out_exterior(&mut m, &shape, layer.fill_opacity);
+                paint_glow(&mut work, &m, g, sb, anchor, big, patterns);
+            }
+            _ => {}
         }
     }
 
@@ -1674,52 +1717,6 @@ pub(crate) fn composite_with_effects_prepared(
         Map { w: m.w, h: m.h, v }
     };
     let full = Map { w, h, v: shape.v.iter().map(|a| if inside(*a) { 1.0 } else { 0.0 }).collect() };
-    for (_, e) in rev() {
-        if let Effect::PatternOverlay { common, name, id, scale, angle, link, phase } = e {
-            paint_pattern(&mut lay, &full, patterns, name, id, Placement::anchored(anchor, *link, *phase, *scale, *angle), big, common.blend, common.opacity);
-        }
-    }
-    for (_, e) in rev() {
-        if let Effect::GradientOverlay { common, gradient, .. } = e {
-            paint_fx(&mut lay, &full, &FxPaint::Gradient(gradient.clone()), sb, anchor, big, common.blend, common.opacity, patterns)
-        }
-    }
-    for (_, e) in rev() {
-        if let Effect::ColorOverlay { common, color } = e {
-            paint_color(&mut lay, &full, rgb(color), common.blend, common.opacity);
-        }
-    }
-    for (i, e) in rev() {
-        if let Effect::Satin(s) = e {
-            let m = rel(fx(i, 0));
-            paint_color(&mut lay, &m, rgb(&s.color), s.common.blend, s.common.opacity);
-        }
-    }
-    for (i, e) in rev() {
-        if let Effect::InnerGlow(g) = e {
-            paint_glow(&mut lay, &rel(fx(i, 0)), g, sb, anchor, big, patterns);
-        }
-    }
-    if interior_group {
-        for p in &mut lay.px {
-            p[3] *= fill.max(0.0);
-        }
-    }
-    for (i, e) in rev() {
-        if let Effect::InnerShadow(s) = e {
-            let m = rel(fx(i, 0));
-            paint_color(&mut lay, &m, rgb(&s.color), s.common.blend, s.common.opacity);
-        }
-    }
-    // A stroked shape's vector stroke: Photoshop draws it above the fill's clipped layers and
-    // interior effects, below the stroke effect (psd-tools stroke-composite).
-    if let Some(vs) = &vstroke {
-        for (i, ((p, s), a)) in lay.px.iter_mut().zip(&vs.stroke.px).zip(&shape.v).enumerate() {
-            if s[3] > 0.0 && inside(*a) {
-                *p = psblend::composite(BlendMode::Normal, *p, [s[0], s[1], s[2], fill * (kmask(i) * s[3] / a).min(1.0)], 1.0);
-            }
-        }
-    }
     // Strokes. Inside parts are painted over the layer (bottom instance first); outside parts
     // are slid beneath it, so the first listed (top) instance is processed first.
     let strokes: Vec<&photocraft_doc::StrokeFx> = items.iter().filter_map(|e| if let Effect::Stroke(s) = e { Some(s) } else { None }).collect();
@@ -1730,25 +1727,73 @@ pub(crate) fn composite_with_effects_prepared(
     let widths = stroke_widths;
     // A gradient stroke aligned with the layer spans the stroke's own extent.
     let frame = |st: &photocraft_doc::StrokeFx| maps.stroke_frame(st).unwrap_or(sb);
-    for st in strokes.iter().rev().copied() {
-        let (in_w, _) = widths(st);
-        if in_w <= 0.0 {
+    let group_fill = |lay: &mut Buffer| {
+        for p in &mut lay.px {
+            p[3] *= fill.max(0.0);
+        }
+    };
+    // A stroked shape's vector stroke: Photoshop draws it above the fill's clipped layers and
+    // interior effects, below the stroke effect (psd-tools stroke-composite).
+    let vector_stroke = |lay: &mut Buffer| {
+        if let Some(vs) = &vstroke {
+            for (i, ((p, s), a)) in lay.px.iter_mut().zip(&vs.stroke.px).zip(&shape.v).enumerate() {
+                if s[3] > 0.0 && inside(*a) {
+                    *p = psblend::composite(BlendMode::Normal, *p, [s[0], s[1], s[2], fill * (kmask(i) * s[3] / a).min(1.0)], 1.0);
+                }
+            }
+        }
+    };
+    let (mut grouped, mut stroked) = (!interior_group, false);
+    for &(i, e) in &order {
+        let interior = match e {
+            Effect::BevelEmboss(_) => maps.bevel_paint[i] == BevelPaint::Inner,
+            _ => stack_rank(e) >= 2,
+        };
+        if !interior {
             continue;
         }
-        let mut m = Map::new(w, h, 0.0);
-        for ((mv, a), dv) in m.v.iter_mut().zip(&shape.v).zip(&din) {
-            *mv = if inside(*a) { (in_w + 0.5 - dv).clamp(0.0, 1.0) } else { 0.0 };
+        if !grouped && above_interior_group(e) {
+            group_fill(&mut lay);
+            grouped = true;
         }
-        paint_fx(&mut lay, &m, &st.paint, frame(st), anchor, big, st.common.blend, st.common.opacity, patterns);
+        if !stroked && above_vector_stroke(e) {
+            vector_stroke(&mut lay);
+            stroked = true;
+        }
+        match e {
+            Effect::PatternOverlay { common, name, id, scale, angle, link, phase } => {
+                paint_pattern(&mut lay, &full, patterns, name, id, Placement::anchored(anchor, *link, *phase, *scale, *angle), big, common.blend, common.opacity);
+            }
+            Effect::GradientOverlay { common, gradient, .. } => {
+                paint_fx(&mut lay, &full, &FxPaint::Gradient(gradient.clone()), sb, anchor, big, common.blend, common.opacity, patterns)
+            }
+            Effect::ColorOverlay { common, color } => paint_color(&mut lay, &full, rgb(color), common.blend, common.opacity),
+            Effect::Satin(s) => paint_color(&mut lay, &rel(fx(i, 0)), rgb(&s.color), s.common.blend, s.common.opacity),
+            Effect::InnerGlow(g) => paint_glow(&mut lay, &rel(fx(i, 0)), g, sb, anchor, big, patterns),
+            Effect::InnerShadow(s) => paint_color(&mut lay, &rel(fx(i, 0)), rgb(&s.color), s.common.blend, s.common.opacity),
+            Effect::Stroke(st) => {
+                let (in_w, _) = widths(st);
+                if in_w > 0.0 {
+                    let mut m = Map::new(w, h, 0.0);
+                    for ((mv, a), dv) in m.v.iter_mut().zip(&shape.v).zip(&din) {
+                        *mv = if inside(*a) { (in_w + 0.5 - dv).clamp(0.0, 1.0) } else { 0.0 };
+                    }
+                    paint_fx(&mut lay, &m, &st.paint, frame(st), anchor, big, st.common.blend, st.common.opacity, patterns);
+                }
+            }
+            Effect::BevelEmboss(b) => {
+                let (hi, sh) = (rel(fx(i, 0)), rel(fx(i, 1)));
+                paint_color(&mut lay, &hi, rgb(&b.highlight_color), b.highlight.blend, b.highlight.opacity);
+                paint_color(&mut lay, &sh, rgb(&b.shadow_color), b.shadow.blend, b.shadow.opacity);
+            }
+            Effect::DropShadow(_) | Effect::OuterGlow(_) => {}
+        }
     }
-    for (i, e) in rev() {
-        if let Effect::BevelEmboss(b) = e
-            && maps.bevel_paint[i] == BevelPaint::Inner
-        {
-            let (hi, sh) = (rel(fx(i, 0)), rel(fx(i, 1)));
-            paint_color(&mut lay, &hi, rgb(&b.highlight_color), b.highlight.blend, b.highlight.opacity);
-            paint_color(&mut lay, &sh, rgb(&b.shadow_color), b.shadow.blend, b.shadow.opacity);
-        }
+    if !grouped {
+        group_fill(&mut lay);
+    }
+    if !stroked {
+        vector_stroke(&mut lay);
     }
     // The shape's own alpha.
     for (p, a) in lay.px.iter_mut().zip(&shape.v) {

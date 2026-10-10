@@ -1021,32 +1021,35 @@ impl<'a> Planner<'a> {
         } else {
             self.retain(backdrop)
         };
-        for &(i, e) in &rev {
-            if let Effect::DropShadow(s) = e {
-                // The layer hides the shadow beneath it where its fill is see-through.
-                let flags = if s.knocks_out { F_KNOCKOUT } else { 0 };
-                let see_through = 1.0 - layer.fill_opacity.clamp(0.0, 1.0);
-                w = self.paint_k(
-                    w,
-                    content,
-                    Cov::Map(map(i, 0), 0.0),
-                    &Paint::Color(s.color.to_rgb()),
-                    s.common.blend,
-                    s.common.opacity,
-                    flags,
-                    clip,
-                    sb,
-                    see_through,
-                );
-            }
-        }
-        for &(i, e) in &rev {
-            if let Effect::OuterGlow(g) = e {
-                let paint = self.glow_paint(g, anchor);
-                // Match CPU exterior knockout: a see-through fill must not reveal the
-                // glow through its own shape. The shader applies m × (1 − alpha × k).
-                let see_through = 1.0 - layer.fill_opacity.clamp(0.0, 1.0);
-                w = self.paint_k(w, content, Cov::Map(map(i, 0), 0.0), &paint, g.common.blend, g.common.opacity, F_KNOCKOUT, clip, sb, see_through);
+        // Paint order, bottom first (`effects::paint_order`: Photoshop's by kind, or the layer's own).
+        let order = photocraft_compose::effects::paint_order(&items, layer.effects.custom_order);
+        for &(i, e) in &order {
+            match e {
+                Effect::DropShadow(s) => {
+                    // The layer hides the shadow beneath it where its fill is see-through.
+                    let flags = if s.knocks_out { F_KNOCKOUT } else { 0 };
+                    let see_through = 1.0 - layer.fill_opacity.clamp(0.0, 1.0);
+                    w = self.paint_k(
+                        w,
+                        content,
+                        Cov::Map(map(i, 0), 0.0),
+                        &Paint::Color(s.color.to_rgb()),
+                        s.common.blend,
+                        s.common.opacity,
+                        flags,
+                        clip,
+                        sb,
+                        see_through,
+                    );
+                }
+                Effect::OuterGlow(g) => {
+                    let paint = self.glow_paint(g, anchor);
+                    // Match CPU exterior knockout: a see-through fill must not reveal the
+                    // glow through its own shape. The shader applies m × (1 − alpha × k).
+                    let see_through = 1.0 - layer.fill_opacity.clamp(0.0, 1.0);
+                    w = self.paint_k(w, content, Cov::Map(map(i, 0), 0.0), &paint, g.common.blend, g.common.opacity, F_KNOCKOUT, clip, sb, see_through);
+                }
+                _ => {}
             }
         }
 
@@ -1058,89 +1061,88 @@ impl<'a> Planner<'a> {
         } else {
             init(self, lay_src, None, INIT_INSIDE, layer.fill_opacity)
         };
-        for &(_, e) in &rev {
-            if let Effect::PatternOverlay { common, name, id, scale, angle, link, phase } = e
-                && let Some(pat) = photocraft_doc::pattern::find(self.cx.patterns, id, name).filter(|p| !p.is_empty())
-            {
-                let paint = Paint::Pattern(pat, placement(anchor, *link, *phase, *scale, *angle));
-                l = self.paint(l, content, Cov::One, &paint, common.blend, common.opacity, F_GATE, clip, sb);
-            }
-        }
-        for &(_, e) in &rev {
-            if let Effect::GradientOverlay { common, gradient, .. } = e {
-                l = self.paint(l, content, Cov::One, &Paint::Gradient(gradient), common.blend, common.opacity, F_GATE, clip, sb);
-            }
-        }
-        for &(_, e) in &rev {
-            if let Effect::ColorOverlay { common, color } = e {
-                l = self.paint(l, content, Cov::One, &Paint::Color(color.to_rgb()), common.blend, common.opacity, F_GATE, clip, sb);
-            }
-        }
-        for &(i, e) in &rev {
-            if let Effect::Satin(s) = e {
-                l = self.paint(l, content, Cov::Map(map(i, 0), 0.0), &Paint::Color(s.color.to_rgb()), s.common.blend, s.common.opacity, F_REL, clip, sb);
-            }
-        }
-        for &(i, e) in &rev {
-            if let Effect::InnerGlow(g) = e {
-                let paint = self.glow_paint(g, anchor);
-                l = self.paint(l, content, Cov::Map(map(i, 0), 0.0), &paint, g.common.blend, g.common.opacity, F_REL, clip, sb);
-            }
-        }
-        for &(i, e) in &rev {
-            if let Effect::InnerShadow(s) = e {
-                l = self.paint(l, content, Cov::Map(map(i, 0), 0.0), &Paint::Color(s.color.to_rgb()), s.common.blend, s.common.opacity, F_REL, clip, sb);
-            }
-        }
-        if let Some(s) = vstroke {
+        let bevel_paint = |b: &photocraft_doc::Bevel| photocraft_compose::effects::bevel_geom(b).paint;
+        // The shape's vector stroke goes beneath the strokes and inner bevels.
+        let mut vstroke = vstroke;
+        let vector_stroke = |s: &mut Self, l: Slot, vstroke: &mut Option<Slot>| -> Slot {
+            let Some(vs) = vstroke.take() else { return l };
             let mut p = Pass::new(Kernel::FxInit, 0);
             p.a = Some(l);
-            p.b = Some(self.retain(content));
-            p.c = Some(s);
+            p.b = Some(s.retain(content));
+            p.c = Some(vs);
             p.adjust_kind = INIT_VSTROKE;
             p.opacity = layer.fill_opacity;
             p.clip = Some(clip);
-            l = self.emit(p);
-        }
-        // Inside stroke parts are painted over the layer (bottom instance first).
-        for &(i, e) in &rev {
-            if let Effect::Stroke(st) = e {
-                let (in_w, _) = stroke_widths(st);
-                if in_w > 0.0 {
-                    let paint = self.fx_paint(&st.paint, anchor);
+            s.emit(p)
+        };
+        for &(i, e) in &order {
+            if let Effect::BevelEmboss(b) = e
+                && bevel_paint(b) != photocraft_compose::effects::BevelPaint::Inner
+            {
+                continue;
+            }
+            if photocraft_compose::effects::above_vector_stroke(e) {
+                l = vector_stroke(self, l, &mut vstroke);
+            }
+            match e {
+                Effect::PatternOverlay { common, name, id, scale, angle, link, phase } => {
+                    if let Some(pat) = photocraft_doc::pattern::find(self.cx.patterns, id, name).filter(|p| !p.is_empty()) {
+                        let paint = Paint::Pattern(pat, placement(anchor, *link, *phase, *scale, *angle));
+                        l = self.paint(l, content, Cov::One, &paint, common.blend, common.opacity, F_GATE, clip, sb);
+                    }
+                }
+                Effect::GradientOverlay { common, gradient, .. } => {
+                    l = self.paint(l, content, Cov::One, &Paint::Gradient(gradient), common.blend, common.opacity, F_GATE, clip, sb);
+                }
+                Effect::ColorOverlay { common, color } => {
+                    l = self.paint(l, content, Cov::One, &Paint::Color(color.to_rgb()), common.blend, common.opacity, F_GATE, clip, sb);
+                }
+                Effect::Satin(s) => {
+                    l = self.paint(l, content, Cov::Map(map(i, 0), 0.0), &Paint::Color(s.color.to_rgb()), s.common.blend, s.common.opacity, F_REL, clip, sb);
+                }
+                Effect::InnerGlow(g) => {
+                    let paint = self.glow_paint(g, anchor);
+                    l = self.paint(l, content, Cov::Map(map(i, 0), 0.0), &paint, g.common.blend, g.common.opacity, F_REL, clip, sb);
+                }
+                Effect::InnerShadow(s) => {
+                    l = self.paint(l, content, Cov::Map(map(i, 0), 0.0), &Paint::Color(s.color.to_rgb()), s.common.blend, s.common.opacity, F_REL, clip, sb);
+                }
+                // Inside stroke parts are painted over the layer (bottom instance first).
+                Effect::Stroke(st) => {
+                    let (in_w, _) = stroke_widths(st);
+                    if in_w > 0.0 {
+                        let paint = self.fx_paint(&st.paint, anchor);
+                        l = self.paint(
+                            l,
+                            content,
+                            Cov::Map(map(i, 1), (in_w + 0.5).clamp(0.0, 1.0)),
+                            &paint,
+                            st.common.blend,
+                            st.common.opacity,
+                            F_GATE,
+                            clip,
+                            photocraft_compose::stroke_frame(self.cx.doc, layer, st).unwrap_or(sb),
+                        );
+                    }
+                }
+                Effect::BevelEmboss(b) => {
                     l = self.paint(
                         l,
                         content,
-                        Cov::Map(map(i, 1), (in_w + 0.5).clamp(0.0, 1.0)),
-                        &paint,
-                        st.common.blend,
-                        st.common.opacity,
-                        F_GATE,
+                        Cov::Map(map(i, 0), 0.0),
+                        &Paint::Color(b.highlight_color.to_rgb()),
+                        b.highlight.blend,
+                        b.highlight.opacity,
+                        F_REL,
                         clip,
-                        photocraft_compose::stroke_frame(self.cx.doc, layer, st).unwrap_or(sb),
+                        sb,
                     );
+                    l = self.paint(l, content, Cov::Map(map(i, 1), 0.0), &Paint::Color(b.shadow_color.to_rgb()), b.shadow.blend, b.shadow.opacity, F_REL, clip, sb);
                 }
+                Effect::DropShadow(_) | Effect::OuterGlow(_) => {}
             }
         }
-        let bevel_paint = |b: &photocraft_doc::Bevel| photocraft_compose::effects::bevel_geom(b).paint;
-        for &(i, e) in &rev {
-            if let Effect::BevelEmboss(b) = e
-                && bevel_paint(b) == photocraft_compose::effects::BevelPaint::Inner
-            {
-                l = self.paint(
-                    l,
-                    content,
-                    Cov::Map(map(i, 0), 0.0),
-                    &Paint::Color(b.highlight_color.to_rgb()),
-                    b.highlight.blend,
-                    b.highlight.opacity,
-                    F_REL,
-                    clip,
-                    sb,
-                );
-                l = self.paint(l, content, Cov::Map(map(i, 1), 0.0), &Paint::Color(b.shadow_color.to_rgb()), b.shadow.blend, b.shadow.opacity, F_REL, clip, sb);
-            }
-        }
+        l = vector_stroke(self, l, &mut vstroke);
         // The shape's own alpha.
         let c = self.retain(content);
         l = init(self, l, Some(c), INIT_ALPHA, 1.0);

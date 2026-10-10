@@ -58,6 +58,19 @@ fn filtered_picker_requests_only_the_given_extensions() {
 }
 
 #[test]
+fn scripts_browse_offers_script_files_not_images() {
+    let (mut app, open, _) = app();
+    let ctx = egui::Context::default();
+    menus::invoke(&mut app, &ctx, "file.scripts.browse", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert!(matches!(
+        open.borrow().first().map(|(r, _)| r),
+        Some(FileDialogRequest::Open { multiple: false, extensions: Some(exts), .. })
+            if exts.iter().map(String::as_str).collect::<Vec<_>>() == ["json", "txt"]
+    ));
+}
+
+#[test]
 fn last_used_dir_takes_the_most_recent_parent() {
     assert_eq!(last_used_dir(&[]), None);
     assert_eq!(last_used_dir(&["/pics/cat.psd".into()]), Some("/pics".into()));

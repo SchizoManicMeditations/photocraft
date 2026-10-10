@@ -322,6 +322,44 @@ pub(crate) fn composite_over(dst: &mut Surface, top: &Surface) {
     dst.write_region(b, &d);
 }
 
+/// The affine part of `h`, when it has no perspective (type, shapes and vector masks need one).
+fn affine_part(h: &Homography) -> Option<Affine> {
+    let m = h.0;
+    (m[6].abs() < 1e-12 && m[7].abs() < 1e-12).then(|| Affine { m: [m[0] / m[8], m[3] / m[8], m[1] / m[8], m[4] / m[8], m[2] / m[8], m[5] / m[8]] })
+}
+
+/// Transform layer `id` of `doc` in place (with a selection, only its selected pixels), re-rendering
+/// type, shapes and smart objects. The selection itself is left alone.
+fn transform_in_doc(doc: &mut Document, id: LayerId, h: &Homography, affine: Option<Affine>, interp: Interp) -> Result<()> {
+    let sel = doc.selection.clone();
+    let is_group = doc.layer(id).is_some_and(Layer::is_group);
+    let group = group_locks(doc, id);
+    let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+    transform_layer(if is_group { None } else { sel.as_ref() }, group, l, h, affine, interp)?;
+    // Type layers re-render from their new transform.
+    let snapshot = doc.clone();
+    if let Some(l) = doc.layer_mut(id) {
+        refresh_text(&snapshot, l);
+    }
+    Ok(())
+}
+
+/// `doc` with layer `id` transformed as `edit.transform` would (`rect`'s corners to `quad`), without
+/// a history step: Free Transform's live preview, so the layer stays at its place in the stack
+/// (layers above still cover it, its blend mode and effects still apply).
+pub fn transformed(doc: &Document, id: LayerId, rect: [f64; 4], quad: [[f64; 2]; 4], interpolation: &str) -> Result<Document> {
+    if rect.iter().chain(quad.iter().flatten()).any(|v| !v.is_finite()) {
+        return Err(bad("non-finite rect or quad"));
+    }
+    let h = Homography::rect_to_quad(rect, quad).ok_or_else(|| bad("degenerate quad"))?;
+    if h.inverse().is_none() {
+        return Err(bad("the transform collapses the layer"));
+    }
+    let mut out = doc.clone();
+    transform_in_doc(&mut out, id, &h, affine_part(&h), Interp::parse(interpolation))?;
+    Ok(out)
+}
+
 fn quad_param(p: &Value) -> Option<[[f64; 2]; 4]> {
     let a = p.get("quad")?.as_array()?;
     if a.len() != 4 {
@@ -379,9 +417,7 @@ fn transform(s: &mut Session, p: &Value) -> Result<Value> {
     if h.inverse().is_none() {
         return Err(bad("the transform collapses the layer"));
     }
-    let m = h.0;
-    let affine =
-        (m[6].abs() < 1e-12 && m[7].abs() < 1e-12).then(|| Affine { m: [m[0] / m[8], m[3] / m[8], m[1] / m[8], m[4] / m[8], m[2] / m[8], m[5] / m[8]] });
+    let affine = affine_part(&h);
     let interp = Interp::parse(p.get("interpolation").and_then(Value::as_str).unwrap_or("bicubic"));
     let lone = lone.is_some();
     s.edit("Free Transform", |doc, _| {
@@ -399,15 +435,7 @@ fn transform(s: &mut Session, p: &Value) -> Result<Value> {
             return Ok(());
         }
         let id = id.ok_or_else(|| EngineError::Other("no active layer".into()))?;
-        let is_group = doc.layer(id).is_some_and(Layer::is_group);
-        let group = group_locks(doc, id);
-        let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-        transform_layer(if is_group { None } else { sel.as_ref() }, group, l, &h, affine, interp)?;
-        // Type layers re-render from their new transform.
-        let snapshot = doc.clone();
-        if let Some(l) = doc.layer_mut(id) {
-            refresh_text(&snapshot, l);
-        }
+        transform_in_doc(doc, id, &h, affine, interp)?;
         // The selection outline moves with the pixels.
         if let Some(sel) = &doc.selection {
             doc.selection = Some(warp_gray(sel, &h, Interp::Bilinear)).filter(|s| !s.content_bounds().is_empty());
@@ -450,6 +478,23 @@ mod tests {
     fn active_bounds(s: &Session) -> Rect {
         let st = s.active().unwrap();
         st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().content_bounds()
+    }
+
+    #[test]
+    fn transformed_previews_in_place_without_history() {
+        let s = session();
+        let st = s.active().unwrap();
+        let id = st.active_layer.unwrap();
+        let order: Vec<_> = st.doc.layers.iter().map(|l| l.id).collect();
+        let rect = [10.0, 10.0, 30.0, 20.0];
+        let moved = transformed(&st.doc, id, rect, [[50.0, 60.0], [70.0, 60.0], [70.0, 70.0], [50.0, 70.0]], "bilinear").unwrap();
+        let b = moved.layer(id).unwrap().surface().unwrap().content_bounds();
+        assert_eq!((b.x0, b.y0, b.x1, b.y1), (50, 60, 70, 70));
+        assert_eq!(moved.layers.iter().map(|l| l.id).collect::<Vec<_>>(), order, "the layer keeps its place in the stack");
+        assert_eq!(active_bounds(&s), Rect::new(10, 10, 30, 20), "the document itself is untouched");
+        assert!(transformed(&st.doc, id, rect, [[0.0, 0.0]; 4], "bicubic").is_err());
+        assert!(transformed(&st.doc, id, [f64::NAN, 0.0, 1.0, 1.0], [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], "bicubic").is_err());
+        assert!(transformed(&st.doc, LayerId(9999), rect, [[0.0, 0.0], [20.0, 0.0], [20.0, 10.0], [0.0, 10.0]], "bicubic").is_err());
     }
 
     #[test]

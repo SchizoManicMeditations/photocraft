@@ -221,9 +221,6 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn new_preset(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "style.presets.new";
-    let id = crate::commands::layer_param(s, p)?;
-    let d = s.active().ok_or(EngineError::NoDocument)?;
-    let l = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     let with_fx = p.get("includeEffects").and_then(Value::as_bool).unwrap_or(true);
     let with_blend = p.get("includeBlending").and_then(Value::as_bool).unwrap_or(true);
     if !with_fx && !with_blend {
@@ -243,20 +240,30 @@ fn new_preset(s: &mut Session, p: &Value) -> Result<Value> {
                 .collect()
         })
         .transpose()?;
+    // A style defined entirely by its params (an explicit effect list) needs no document, so a
+    // script can install styles at start-up; otherwise it captures the target layer.
+    let layer = if listed.is_some() && p.get("layer").is_none() && has_layer(s).is_err() {
+        None
+    } else {
+        let id = crate::commands::layer_param(s, p)?;
+        let d = s.active().ok_or(EngineError::NoDocument)?;
+        Some(d.doc.layer(id).ok_or(EngineError::NoLayer(id))?)
+    };
     let style = StylePreset {
         name: unique_name(&s.presets.styles, str_param(p, "name").unwrap_or("Style")),
         effects: match listed {
             Some(fx) => fx,
-            None => {
-                if with_fx {
-                    l.effects.items.clone()
-                } else {
-                    Vec::new()
-                }
-            }
+            None => match layer {
+                Some(l) if with_fx => l.effects.items.clone(),
+                _ => Vec::new(),
+            },
         },
-        blend: p.get("blend").and_then(Value::as_str).and_then(crate::commands::blend_from_str).or_else(|| with_blend.then_some(l.blend)),
-        fill_opacity: p.get("fillOpacity").and_then(Value::as_f64).map(|v| (v / 100.0).clamp(0.0, 1.0) as f32).or_else(|| with_blend.then_some(l.fill_opacity)),
+        blend: p.get("blend").and_then(Value::as_str).and_then(crate::commands::blend_from_str).or_else(|| layer.filter(|_| with_blend).map(|l| l.blend)),
+        fill_opacity: p
+            .get("fillOpacity")
+            .and_then(Value::as_f64)
+            .map(|v| (v / 100.0).clamp(0.0, 1.0) as f32)
+            .or_else(|| layer.filter(|_| with_blend).map(|l| l.fill_opacity)),
     };
     let gi = group_index(&mut s.presets.styles, str_param(p, "group"));
     let out = json!({"name": style.name, "group": s.presets.styles[gi].name, "effects": style.effects.len()});
@@ -358,7 +365,8 @@ pub fn specs() -> Vec<CommandSpec> {
             menu: &[],
             shortcut: None,
             params: r##"{"name":str="Style","group":name?,"layer":id?,"includeEffects":bool=true,"includeBlending":bool=true,"effects":[[kind, params]]? (explicit list, e.g. the Layer Style dialog's pending state; overrides includeEffects),"blend":str?,"fillOpacity":0..100? (override the layer's blending options)}"##,
-            enabled: has_layer,
+            // Without a layer it still runs with an explicit `effects` list (it checks the rest).
+            enabled: always,
             run: new_preset,
             journal: true,
         },

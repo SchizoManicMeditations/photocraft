@@ -266,6 +266,10 @@ pub struct Effects {
     /// strokes and glows) anchor their tiling. It moves with the layer. `None` = the layer's
     /// top-left.
     pub reference: Option<(f64, f64)>,
+    /// PhotoCraft's reorderable stack: `items` paint in list order (the first listed on top)
+    /// instead of Photoshop's fixed order by kind. Exterior effects stay beneath the layer and
+    /// interior ones on it. Not stored in PSDs (Photoshop has no such setting).
+    pub custom_order: bool,
 }
 
 /// Deepest group nesting a document may hold: a layer inside this many nested groups is the

@@ -2270,3 +2270,9 @@ fontWeight	Italic	斜體
 	Cycle Orientation	循環切換方向
 	Set the overlay options for the Crop tool	設定裁切工具的覆蓋選項
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt 按一下被桌面環境攔截了，它用 Alt 拖曳來移動視窗。請把桌面的視窗移動鍵改為 Super，或在 視窗 › 輔助鍵 中鎖定 Alt。
+
+# Layer Style > effect order (PhotoCraft: a reorderable stack)
+	Move Effect Up	上移效果
+	Move Effect Down	下移效果
+	Reset Order	重設順序
+	Stack the effects in Photoshop's order	依 Photoshop 的順序堆疊效果

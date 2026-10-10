@@ -587,6 +587,43 @@ fn inner_shadow_only_inside() {
     assert!(close4(px(&d, 20, 5), [1.0; 4]));
 }
 
+#[test]
+fn custom_order_stacks_effects_as_listed() {
+    let overlay = Effect::ColorOverlay { common: FxCommon::new(photocraft_color::BlendMode::Normal, 1.0), color: Color::rgb(0.0, 1.0, 0.0) };
+    let inner = Effect::InnerShadow(Shadow { knocks_out: false, ..shadow(4.0, 90.0) });
+    // Photoshop's order: the inner shadow is painted over the overlay wherever it's listed.
+    let mut d = fx_doc(vec![overlay.clone(), inner.clone()]);
+    assert!(close4(px(&d, 20, 11), [0.0, 0.0, 0.0, 1.0]), "{:?}", px(&d, 20, 11));
+    // Custom order: the overlay, listed first, is on top and covers the shadow.
+    d.layers[1].effects.custom_order = true;
+    assert!(close4(px(&d, 20, 11), [0.0, 1.0, 0.0, 1.0]), "{:?}", px(&d, 20, 11));
+    // Listed the other way round, the shadow is on top again.
+    d.layers[1].effects.items = vec![inner, overlay];
+    assert!(close4(px(&d, 20, 11), [0.0, 0.0, 0.0, 1.0]), "{:?}", px(&d, 20, 11));
+}
+
+#[test]
+fn custom_order_of_photoshops_list_paints_the_same() {
+    // The Layer Style dialog's list (top of the stack first), two strokes and two shadows.
+    let mut d = fx_doc(vec![
+        stroke(2.0, StrokePosition::Inside),
+        stroke(4.0, StrokePosition::Center),
+        Effect::InnerShadow(Shadow { knocks_out: false, size: 2.0, spread: 0.0, ..shadow(3.0, 60.0) }),
+        Effect::ColorOverlay { common: FxCommon::new(photocraft_color::BlendMode::Multiply, 0.5), color: Color::rgb(0.0, 1.0, 0.0) },
+        Effect::OuterGlow(glow(GlowTechnique::Softer, GlowSource::Edge)),
+        Effect::DropShadow(Shadow { color: Color::rgb(0.0, 0.0, 1.0), ..shadow(5.0, 45.0) }),
+        Effect::DropShadow(shadow(3.0, 135.0)),
+    ]);
+    let all = Rect::new(0, 0, 40, 40);
+    let photoshop = render(&d, all).px;
+    d.layers[1].effects.custom_order = true;
+    let custom = render(&d, all).px;
+    assert!(photoshop.iter().zip(&custom).all(|(a, b)| close4(*a, *b)));
+    // Exterior effects reorder among themselves: the second shadow on top now.
+    d.layers[1].effects.items.swap(5, 6);
+    assert_ne!(render(&d, all).px, custom);
+}
+
 fn glow(technique: GlowTechnique, source: GlowSource) -> Glow {
     Glow {
         common: FxCommon::new(photocraft_color::BlendMode::Normal, 1.0),

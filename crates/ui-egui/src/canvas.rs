@@ -779,10 +779,14 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> (std::sync::Ar
     if let Some(shown) = crate::blend_preview::display_doc(app, idx) {
         return shown;
     }
-    let st = &app.session.documents()[idx];
     if let Some(l) = live_stroke(app, idx) {
         return (l.stroke.doc().clone(), l.display_key());
     }
+    // Free Transform of a layer that something covers or that blends: transformed in place.
+    if let Some(shown) = crate::transform_tool::display_doc(app, idx) {
+        return shown;
+    }
+    let st = &app.session.documents()[idx];
     if let (Some(t), Some(pv)) = (&app.ui.transform, &app.transform_preview)
         && app.session.active_index() == Some(idx)
         && st.doc.layer(photocraft_doc::LayerId(t.layer)).is_some()

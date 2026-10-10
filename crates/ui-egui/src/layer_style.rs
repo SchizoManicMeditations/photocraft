@@ -52,8 +52,10 @@ pub const KINDS: &[(&str, &str)] = &[
     ("dropShadow", "Drop Shadow"),
 ];
 
-/// Effect kinds Photoshop offers several instances of (stored as `…Multi` lists in the PSD).
-const MULTI: &[&str] = &["stroke", "dropShadow", "innerShadow", "colorOverlay", "gradientOverlay"];
+/// Effect kinds that take several instances (stored as `…Multi` lists in the PSD). Photoshop
+/// offers this for all but Bevel & Emboss; PhotoCraft stacks bevels too (`bevelEmbossMulti`,
+/// which Photoshop skips: it shows the first bevel).
+const MULTI: &[&str] = &["bevelEmboss", "stroke", "dropShadow", "innerShadow", "colorOverlay", "gradientOverlay"];
 
 fn multi(kind: &str) -> bool {
     MULTI.contains(&kind)
@@ -408,16 +410,59 @@ fn next_id(f: &Map<String, Value>) -> String {
 }
 
 /// Adds an instance of `kind`, right after the last one of its kind (the list,
-/// and so the rendered stack, keeps the layer's effect order), and selects it.
+/// and so the rendered stack, keeps the layer's effect order), or for a kind's first
+/// instance above the first effect lower in Photoshop's order; and selects it.
 fn add_instance(f: &mut Map<String, Value>, kind: &str) {
     let light = f.get("pendingGlobalLight").or_else(|| f.get("globalLight")).and_then(Value::as_f64).unwrap_or(120.0) as f32;
     let id = next_id(f);
     let new = json!({"id": id, "kind": kind, "on": true, "params": fresh_params(kind, light)});
+    let rank = kind_rank(kind);
     if let Some(a) = f.get_mut("effects").and_then(Value::as_array_mut) {
-        let pos = a.iter().rposition(|e| e.get("kind").and_then(Value::as_str) == Some(kind)).map_or(a.len(), |i| i + 1);
+        let pos = a
+            .iter()
+            .rposition(|e| e.get("kind").and_then(Value::as_str) == Some(kind))
+            .map(|i| i + 1)
+            .or_else(|| a.iter().position(|e| kind_rank(e.get("kind").and_then(Value::as_str).unwrap_or_default()) > rank))
+            .unwrap_or(a.len());
         a.insert(pos, new);
     }
     f.insert("selected".into(), json!(id));
+}
+
+/// A kind's row in Photoshop's list (`KINDS`, top of the stack first); unknown kinds last.
+fn kind_rank(kind: &str) -> usize {
+    KINDS.iter().position(|k| k.0 == kind).unwrap_or(KINDS.len())
+}
+
+/// Whether the dialog paints its list in its own order (`Effects::custom_order`).
+fn custom_order(f: &Map<String, Value>) -> bool {
+    f.get("customOrder").and_then(Value::as_bool).unwrap_or(false)
+}
+
+/// Puts the list in Photoshop's order (by kind, instances keeping theirs) and leaves custom order.
+fn reset_order(f: &mut Map<String, Value>) {
+    if let Some(a) = f.get_mut("effects").and_then(Value::as_array_mut) {
+        a.sort_by_key(|e| kind_rank(e.get("kind").and_then(Value::as_str).unwrap_or_default()));
+    }
+    f.insert("customOrder".into(), json!(false));
+}
+
+/// Moves an instance one place up (towards the top of the stack) or down. PhotoCraft's own
+/// feature: Photoshop's stack is fixed by kind. The list starts from the order the layer
+/// paints in; custom order is on while the list differs from Photoshop's, so a move among
+/// a kind's instances, or one back into place, stays Photoshop-compatible.
+fn move_instance(f: &mut Map<String, Value>, id: &str, up: bool) {
+    if !custom_order(f) {
+        reset_order(f);
+    }
+    let Some(a) = f.get_mut("effects").and_then(Value::as_array_mut) else { return };
+    let Some(i) = a.iter().position(|e| e.get("id").and_then(Value::as_str) == Some(id)) else { return };
+    let j = if up { i.checked_sub(1) } else { Some(i + 1).filter(|&j| j < a.len()) };
+    if let Some(j) = j {
+        a.swap(i, j);
+    }
+    let ranks: Vec<usize> = a.iter().map(|e| kind_rank(e.get("kind").and_then(Value::as_str).unwrap_or_default())).collect();
+    f.insert("customOrder".into(), json!(!ranks.is_sorted()));
 }
 
 /// Removes an instance; the selection moves to a sibling of the same kind,
@@ -459,6 +504,7 @@ pub fn initial_fields(layer: &Layer, select: Option<&str>, light: f32) -> Map<St
         }));
     }
     f.insert("effects".into(), Value::Array(effects));
+    f.insert("customOrder".into(), json!(layer.effects.custom_order));
     let selected = match select {
         None => effects_of(&f).first().and_then(|e| e.get("id").and_then(Value::as_str)).map(str::to_string).unwrap_or_else(|| "dropShadow".into()),
         Some(STYLES_PAGE) => STYLES_PAGE.to_string(),
@@ -580,7 +626,7 @@ fn apply(f: &Map<String, Value>, mut run: impl FnMut(&str, Value) -> Result<Valu
         };
         entries.push(entry);
     }
-    run("layer.layerStyle.replace", json!({"layer": layer, "effects": entries}))?;
+    run("layer.layerStyle.replace", json!({"layer": layer, "effects": entries, "customOrder": custom_order(f)}))?;
     // An effect lit by the global light follows the document's light angle, so the Angle slider
     // drives that shared angle rather than the per-effect angle the compositor ignores.
     let mut light_angle: Option<f64> = None;
@@ -605,7 +651,7 @@ fn apply(f: &Map<String, Value>, mut run: impl FnMut(&str, Value) -> Result<Valu
 /// Hash of the fields that change the rendered style (not the selected page).
 pub fn preview_hash(f: &Map<String, Value>) -> u64 {
     f.iter()
-        .filter(|(k, _)| matches!(k.as_str(), "layer" | "effects" | "p:blendingOptions" | "pendingGlobalLight"))
+        .filter(|(k, _)| matches!(k.as_str(), "layer" | "effects" | "customOrder" | "p:blendingOptions" | "pendingGlobalLight"))
         .flat_map(|(k, v)| k.bytes().chain(v.to_string().into_bytes()))
         .fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3))
 }
@@ -639,6 +685,7 @@ fn apply_style_preset(app: &PhotocraftApp, f: &mut Map<String, Value>, name: &st
         }));
     }
     f.insert("effects".into(), Value::Array(effects));
+    f.insert("customOrder".into(), json!(false));
     if let Some(b) = style.blend {
         set_param(f, BLENDING, "blend", json!(b.label()));
     }
@@ -725,13 +772,35 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 }
             }
             ui.add_space(4.0);
-            for &(kind, label) in KINDS {
-                let ids: Vec<String> = effects_of(f)
+            // Rows: each kind in Photoshop's order with its instances, or with a custom order the
+            // instances as they stack (first on top), then the kinds not on the layer.
+            let ids_of = |f: &Map<String, Value>, kind: &str| -> Vec<String> {
+                effects_of(f)
                     .iter()
                     .filter(|e| e.get("kind").and_then(Value::as_str) == Some(kind))
                     .filter_map(|e| e.get("id").and_then(Value::as_str).map(str::to_string))
-                    .collect();
-                if ids.is_empty() {
+                    .collect()
+            };
+            let mut rows: Vec<(&str, &str, Option<String>)> = Vec::new();
+            if custom_order(f) {
+                for e in effects_of(f) {
+                    let (Some(kind), Some(id)) = (e.get("kind").and_then(Value::as_str), e.get("id").and_then(Value::as_str)) else { continue };
+                    if let Some(&(kind, label)) = KINDS.iter().find(|k| k.0 == kind) {
+                        rows.push((kind, label, Some(id.to_string())));
+                    }
+                }
+                rows.extend(KINDS.iter().filter(|&&(kind, _)| ids_of(f, kind).is_empty()).map(|&(kind, label)| (kind, label, None)));
+            } else {
+                for &(kind, label) in KINDS {
+                    let ids = ids_of(f, kind);
+                    if ids.is_empty() {
+                        rows.push((kind, label, None));
+                    }
+                    rows.extend(ids.into_iter().map(|id| (kind, label, Some(id))));
+                }
+            }
+            for (kind, label, id) in rows {
+                let Some(id) = id else {
                     // The effect isn't on the layer: a greyed row with an empty checkbox, as in
                     // Photoshop (#1357); a click on either adds it, turned on.
                     let (rect, resp) = ui.allocate_exact_size(vec2(190.0, 26.0), Sense::click());
@@ -750,57 +819,69 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                         add_instance(f, kind);
                     }
                     continue;
+                };
+                let count = ids_of(f, kind).len();
+                let id = &id;
+                let Some(e) = entry(f, id) else { continue };
+                let mut on = e.get("on").and_then(Value::as_bool).unwrap_or(false);
+                let is_sel = id == &selected;
+                let (rect, resp) = ui.allocate_exact_size(vec2(190.0, 26.0), Sense::click());
+                if is_sel {
+                    ui.painter().rect_filled(rect, t.radius_sm, t.row_selected.gamma_multiply(if t.pro { 1.0 } else { 0.0 }).max_alpha(t.hover));
+                } else if resp.hovered() {
+                    ui.painter().rect_filled(rect, t.radius_sm, t.hover.gamma_multiply(0.5));
                 }
-                let count = ids.len();
-                for id in &ids {
-                    let Some(e) = entry(f, id) else { continue };
-                    let kind_label = KINDS.iter().find(|k| k.0 == kind).map(|k| k.1).unwrap_or(label);
-                    let mut on = e.get("on").and_then(Value::as_bool).unwrap_or(false);
-                    let is_sel = id == &selected;
-                    let (rect, resp) = ui.allocate_exact_size(vec2(190.0, 26.0), Sense::click());
-                    if is_sel {
-                        ui.painter().rect_filled(rect, t.radius_sm, t.row_selected.gamma_multiply(if t.pro { 1.0 } else { 0.0 }).max_alpha(t.hover));
-                    } else if resp.hovered() {
-                        ui.painter().rect_filled(rect, t.radius_sm, t.hover.gamma_multiply(0.5));
+                let cb = fx_checkbox_rect(rect);
+                let cresp = ui.interact(cb, ui.id().with(("fxcb", kind, id)), Sense::click());
+                fx_checkbox(ui.painter(), cb, on, &t);
+                ui.painter().text(
+                    rect.left_center() + vec2(28.0, 0.0),
+                    egui::Align2::LEFT_CENTER,
+                    tl!(label),
+                    egui::FontId::proportional(12.5),
+                    if on || is_sel { t.text } else { t.text_dim },
+                );
+                // + adds another instance; − removes one once there are several.
+                if multi(kind) {
+                    let btn = |ui: &egui::Ui, at: egui::Pos2, glyph: &str, tag: &str| {
+                        let r = egui::Rect::from_center_size(at, vec2(18.0, 18.0));
+                        let hresp = ui.interact(r, ui.id().with(("fxbtn", tag, id)), Sense::click());
+                        let col = if hresp.hovered() { t.accent } else { t.text_faint };
+                        ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, glyph, egui::FontId::proportional(13.0), col);
+                        hresp.clicked()
+                    };
+                    if count > 1 && btn(ui, rect.right_center() - vec2(22.0, 0.0), "\u{2212}", "minus") {
+                        remove_instance(f, id);
+                        continue;
                     }
-                    let cb = fx_checkbox_rect(rect);
-                    let cresp = ui.interact(cb, ui.id().with(("fxcb", kind, id)), Sense::click());
-                    fx_checkbox(ui.painter(), cb, on, &t);
-                    ui.painter().text(
-                        rect.left_center() + vec2(28.0, 0.0),
-                        egui::Align2::LEFT_CENTER,
-                        tl!(kind_label),
-                        egui::FontId::proportional(12.5),
-                        if on || is_sel { t.text } else { t.text_dim },
-                    );
-                    // + adds another instance; − removes one once there are several.
-                    if multi(kind) {
-                        let btn = |ui: &egui::Ui, at: egui::Pos2, glyph: &str, tag: &str| {
-                            let r = egui::Rect::from_center_size(at, vec2(18.0, 18.0));
-                            let hresp = ui.interact(r, ui.id().with(("fxbtn", tag, id)), Sense::click());
-                            let col = if hresp.hovered() { t.accent } else { t.text_faint };
-                            ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, glyph, egui::FontId::proportional(13.0), col);
-                            hresp.clicked()
-                        };
-                        if count > 1 && btn(ui, rect.right_center() - vec2(22.0, 0.0), "\u{2212}", "minus") {
-                            remove_instance(f, id);
-                            continue;
-                        }
-                        if btn(ui, rect.right_center() - vec2(8.0, 0.0), "+", "plus") {
-                            add_instance(f, kind);
-                        }
+                    if btn(ui, rect.right_center() - vec2(8.0, 0.0), "+", "plus") {
+                        add_instance(f, kind);
                     }
-                    if cresp.clicked() {
-                        on = !on;
-                        if let Some(e) = entry_mut(f, id) {
-                            e["on"] = json!(on);
-                        }
-                        f.insert("selected".into(), json!(id));
-                    } else if resp.clicked() {
-                        f.insert("selected".into(), json!(id));
+                }
+                if cresp.clicked() {
+                    on = !on;
+                    if let Some(e) = entry_mut(f, id) {
+                        e["on"] = json!(on);
                     }
+                    f.insert("selected".into(), json!(id));
+                } else if resp.clicked() {
+                    f.insert("selected".into(), json!(id));
                 }
             }
+            // PhotoCraft's reorderable stack: move the selected effect up or down past any other.
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                let movable = entry(f, &selected).is_some();
+                if ui.add_enabled(movable, egui::Button::new("▲")).on_hover_text(tl!("Move Effect Up")).clicked() {
+                    move_instance(f, &selected, true);
+                }
+                if ui.add_enabled(movable, egui::Button::new("▼")).on_hover_text(tl!("Move Effect Down")).clicked() {
+                    move_instance(f, &selected, false);
+                }
+                if custom_order(f) && ui.button(tl!("Reset Order")).on_hover_text(tl!("Stack the effects in Photoshop's order")).clicked() {
+                    reset_order(f);
+                }
+            });
         });
         widgets::vline(ui, 330.0);
         // Right: parameters of the selected page.
@@ -1757,6 +1838,69 @@ mod tests {
         assert_eq!(s.active().unwrap().doc.global_light.angle, 45.0);
         let d = s.active().unwrap();
         assert_eq!(d.doc.layer(id).unwrap().effects.items.len(), 2);
+    }
+
+    #[test]
+    fn effects_reorder_past_other_kinds() {
+        let mut s = session();
+        let st = s.active().unwrap();
+        let id = st.active_layer.unwrap();
+        let mut f = initial_fields(st.doc.layer(id).unwrap(), None, st.doc.global_light.angle);
+        // Added out of Photoshop's order, they still list in it.
+        for kind in ["colorOverlay", "innerShadow", "dropShadow"] {
+            add_instance(&mut f, kind);
+        }
+        let kinds = |f: &Map<String, Value>| effects_of(f).iter().map(|e| e["kind"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        assert_eq!(kinds(&f), ["innerShadow", "colorOverlay", "dropShadow"]);
+        assert!(!custom_order(&f));
+        // The overlay moves above the inner shadow: custom order.
+        let overlay = effects_of(&f)[1]["id"].as_str().unwrap().to_string();
+        move_instance(&mut f, &overlay, true);
+        assert_eq!(kinds(&f), ["colorOverlay", "innerShadow", "dropShadow"]);
+        assert!(custom_order(&f));
+        // Nothing above the top one.
+        move_instance(&mut f, &overlay, true);
+        assert_eq!(kinds(&f)[0], "colorOverlay");
+        apply(&f, |cmd, p| s.execute(cmd, p).map_err(|e| e.to_string())).unwrap();
+        let layer = s.active().unwrap().doc.layer(id).unwrap().clone();
+        assert!(layer.effects.custom_order);
+        assert!(matches!(layer.effects.items[0], Effect::ColorOverlay { .. }));
+        // Reopened, the dialog keeps the order; moved back, it's Photoshop's again.
+        let mut f = initial_fields(&layer, None, 120.0);
+        assert!(custom_order(&f));
+        let overlay = effects_of(&f)[0]["id"].as_str().unwrap().to_string();
+        move_instance(&mut f, &overlay, false);
+        assert!(!custom_order(&f));
+        move_instance(&mut f, &overlay, false);
+        reset_order(&mut f);
+        assert_eq!(kinds(&f), ["innerShadow", "colorOverlay", "dropShadow"]);
+        assert!(!custom_order(&f));
+        // Unknown ids are ignored.
+        move_instance(&mut f, "nope", true);
+        assert_eq!(kinds(&f).len(), 3);
+    }
+
+    #[test]
+    fn bevels_stack_like_shadows() {
+        assert!(multi("bevelEmboss"), "the bevel row has a + button");
+        let mut s = session();
+        let st = s.active().unwrap();
+        let id = st.active_layer.unwrap();
+        let mut f = initial_fields(st.doc.layer(id).unwrap(), Some("bevelEmboss"), st.doc.global_light.angle);
+        add_instance(&mut f, "bevelEmboss");
+        let second = f["selected"].as_str().unwrap().to_string();
+        set_param(&mut f, &second, "style", json!("pillow"));
+        apply(&f, |cmd, p| s.execute(cmd, p).map_err(|e| e.to_string())).unwrap();
+        let doc = &s.active().unwrap().doc;
+        let bevels: Vec<_> = doc.layer(id).unwrap().effects.items.iter().filter_map(|e| if let Effect::BevelEmboss(b) = e { Some(b.style) } else { None }).collect();
+        assert_eq!(bevels.len(), 2);
+        assert_eq!(bevels[1], photocraft_doc::BevelStyle::PillowEmboss);
+        // Reopening the dialog lists both, each removable.
+        let mut f = initial_fields(doc.layer(id).unwrap(), None, doc.global_light.angle);
+        let ids: Vec<String> = effects_of(&f).iter().filter(|e| e["kind"] == "bevelEmboss").map(|e| e["id"].as_str().unwrap().to_string()).collect();
+        assert_eq!(ids.len(), 2);
+        remove_instance(&mut f, &ids[0]);
+        assert_eq!(effects_of(&f).iter().filter(|e| e["kind"] == "bevelEmboss").count(), 1);
     }
 
     #[test]

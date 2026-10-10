@@ -86,7 +86,8 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
             form(app, id, "Image Statistics", json!({"mode": "median", "input": dir, "align": false}), json!({"mode": modes}))
         }
         "file.scripts.browse" => {
-            return Some(app.pick_file_bytes(|app, name, bytes| {
+            // Scripts are JSON actions or `command.id {json}` lines, not images.
+            return Some(app.pick_file_bytes_filtered(&["json", "txt"], |app, name, bytes| {
                 let r = app.run("file.scripts.browse", json!({"script": String::from_utf8_lossy(&bytes)}));
                 if r.is_ok() {
                     app.ui.status = format!("Ran script {name}");

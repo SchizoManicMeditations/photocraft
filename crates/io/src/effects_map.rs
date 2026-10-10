@@ -283,13 +283,18 @@ const KINDS: [(&str, &str); 10] = [
     ("IrSh", "innerShadowMulti"),
     ("OrGl", ""),
     ("IrGl", ""),
-    ("ebbl", ""),
+    ("ebbl", BEVEL_MULTI),
     ("ChFX", ""),
     ("SoFi", "solidFillMulti"),
     ("GrFl", "gradientFillMulti"),
     ("patternFill", ""),
     ("FrFX", "frameFXMulti"),
 ];
+
+/// PhotoCraft's list of stacked bevels. Photoshop has no multi key for Bevel & Emboss, so
+/// alongside it the first bevel is also written under `ebbl`: Photoshop, which skips keys it
+/// doesn't know, shows that one, and PhotoCraft reads the whole list back.
+const BEVEL_MULTI: &str = "bevelEmbossMulti";
 
 /// Parses `lfx2` block data: `(master switch, effects)`.
 pub fn parse_lfx2(data: &[u8]) -> Option<(bool, Vec<Effect>)> {
@@ -510,6 +515,10 @@ pub fn write_lfx2(master: bool, items: &[Effect]) -> Vec<u8> {
         match of_kind.len() {
             0 => {}
             1 => d = d.with(single, Value::Descriptor(of_kind.into_iter().next().unwrap_or_default())),
+            _ if multi == BEVEL_MULTI => {
+                let first = of_kind.first().cloned().unwrap_or_default();
+                d = d.with(single, Value::Descriptor(first)).with(multi, Value::List(of_kind.into_iter().map(Value::Descriptor).collect()));
+            }
             _ if !multi.is_empty() => d = d.with(multi, Value::List(of_kind.into_iter().map(Value::Descriptor).collect())),
             // Kinds without a multi key keep only the first instance.
             _ => d = d.with(single, Value::Descriptor(of_kind.into_iter().next().unwrap_or_default())),
@@ -765,6 +774,27 @@ mod tests {
         assert!(vd.descriptor.get("dropShadowMulti").is_some());
         assert!(vd.descriptor.get("frameFXMulti").is_some());
         assert!(vd.descriptor.get("SoFi").is_some());
+    }
+
+    #[test]
+    fn stacked_bevels_round_trip_and_photoshop_sees_the_first() {
+        let Some(Effect::BevelEmboss(b)) = sample_effects().pop() else { panic!("sample ends with a bevel") };
+        let second = Bevel { style: BevelStyle::PillowEmboss, size: 3.0, up: true, contour: None, texture: None, ..b.clone() };
+        let fx = vec![Effect::BevelEmboss(b), Effect::BevelEmboss(second)];
+        let data = write_lfx2(true, &fx);
+        let (vd, _) = VersionedDescriptor::parse_prefix(&data[4..]).unwrap();
+        // Photoshop reads the single key: the first bevel.
+        let Some(Value::Descriptor(single)) = vd.descriptor.get("ebbl") else { panic!("no ebbl") };
+        assert_eq!(parse_one("ebbl", single), Some(fx[0].clone()).map(|e| parse_one("ebbl", &write_one(&e).1).unwrap()));
+        let Some(Value::List(list)) = vd.descriptor.get(BEVEL_MULTI) else { panic!("no bevel list") };
+        assert_eq!(list.len(), 2);
+        let (_, back) = parse_lfx2(&data).unwrap();
+        approx(&fx, &back);
+        // One bevel keeps Photoshop's plain layout.
+        let data = write_lfx2(true, &fx[..1]);
+        let (vd, _) = VersionedDescriptor::parse_prefix(&data[4..]).unwrap();
+        assert!(vd.descriptor.get(BEVEL_MULTI).is_none());
+        assert_eq!(parse_lfx2(&data).unwrap().1.len(), 1);
     }
 
     #[test]

@@ -427,6 +427,17 @@ pub fn overlay_effect(fx: &mut Effect, p: &Value) {
             {
                 bv.gloss_contour = c;
             }
+            // Shading: Highlight Mode / Shadow Mode with their colours and opacities.
+            set_color(p, "highlightColor", &mut bv.highlight_color);
+            set_color(p, "shadowColor", &mut bv.shadow_color);
+            for (c, mode, opacity) in [(&mut bv.highlight, "highlightBlend", "highlightOpacity"), (&mut bv.shadow, "shadowBlend", "shadowOpacity")] {
+                if let Some(x) = p.get(mode).and_then(Value::as_str).and_then(blend_from_str) {
+                    c.blend = x;
+                }
+                if let Some(x) = f_of(p, opacity) {
+                    c.opacity = (x / 100.0).clamp(0.0, 1.0);
+                }
+            }
             if let Some(x) = b_of(p, "contour") {
                 bv.contour = x.then(|| photocraft_doc::BevelContour {
                     contour: builtin_contour(p.get("contourName").and_then(Value::as_str).unwrap_or("Linear")).unwrap_or(Contour::Linear),
@@ -499,6 +510,12 @@ fn replace_effects(s: &mut Session, p: &Value) -> Result<Value> {
     if entries.len() > MAX_EFFECTS {
         return Err(bad(CMD, format!("at most {MAX_EFFECTS} effects")));
     }
+    // Paint in list order (PhotoCraft's reorderable stack) or Photoshop's; absent keeps the layer's.
+    let custom_order = match p.get("customOrder") {
+        None | Some(Value::Null) => None,
+        Some(Value::Bool(b)) => Some(*b),
+        Some(_) => return Err(bad(CMD, "`customOrder` must be a boolean")),
+    };
     let mut list = Vec::with_capacity(entries.len());
     let mut pats = Vec::new();
     for e in entries {
@@ -534,6 +551,9 @@ fn replace_effects(s: &mut Session, p: &Value) -> Result<Value> {
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         l.effects.items = list;
         l.effects.enabled = true;
+        if let Some(c) = custom_order {
+            l.effects.custom_order = c;
+        }
         Ok(())
     })?;
     Ok(json!({ "layer": id.0, "effects": count }))
@@ -656,7 +676,7 @@ pub fn specs() -> Vec<CommandSpec> {
         style_cmd!(
             "bevelEmboss",
             "Bevel & Emboss…",
-            r##"{"style":"inner|outer|emboss|pillow|stroke","technique":"smooth|chiselHard|chiselSoft","contour":bool,"contourRange":1..100=50,"texture":pattern id|name?,"textureScale":1..1000=100,"textureDepth":-1000..1000=100,"textureInvert":bool,"textureLink":bool=true,"depth":1..1000=100,"direction":"up|down","size":px=5,"soften":px,"angle":deg,"altitude":deg,"add":bool}"##
+            r##"{"style":"inner|outer|emboss|pillow|stroke","technique":"smooth|chiselHard|chiselSoft","contour":bool,"contourRange":1..100=50,"texture":pattern id|name?,"textureScale":1..1000=100,"textureDepth":-1000..1000=100,"textureInvert":bool,"textureLink":bool=true,"depth":1..1000=100,"direction":"up|down","size":px=5,"soften":px,"angle":deg,"altitude":deg,"useGlobalLight":bool=true,"glossContour":name,"highlightBlend":str="screen","highlightColor":"#rrggbb"="#ffffff","highlightOpacity":0..100=75,"shadowBlend":str="multiply","shadowColor":"#rrggbb"="#000000","shadowOpacity":0..100=75,"add":bool}"##
         ),
         style_cmd!("satin", "Satin…", r##"{"color":"#rrggbb","opacity":0..100=50,"blend":str,"angle":deg,"distance":px,"size":px,"invert":bool,"add":bool}"##),
         CommandSpec {
@@ -664,7 +684,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Edit Layer Style",
             menu: &[],
             shortcut: None,
-            params: r##"{"layer":id,"effects":[{"kind":"dropShadow|innerShadow|outerGlow|innerGlow|stroke|colorOverlay|gradientOverlay|patternOverlay|satin|bevelEmboss","params":{…layer.layerStyle.<kind> params…},"fx":<effect snapshot carried through the Layer Style dialog, optional>}]} (replaces the layer's whole effect list; an entry with `fx` edits that effect with the params present, one without builds from params)"##,
+            params: r##"{"layer":id,"effects":[{"kind":"dropShadow|innerShadow|outerGlow|innerGlow|stroke|colorOverlay|gradientOverlay|patternOverlay|satin|bevelEmboss","params":{…layer.layerStyle.<kind> params…},"fx":<effect snapshot carried through the Layer Style dialog, optional>}],"customOrder":bool?} (replaces the layer's whole effect list; an entry with `fx` edits that effect with the params present, one without builds from params; customOrder true paints the list in its order, first on top, false in Photoshop's fixed order by kind, absent keeps the layer's)"##,
             enabled: has_layer,
             run: replace_effects,
             journal: true,
@@ -740,6 +760,27 @@ mod tests {
         assert!((b.contour.as_ref().unwrap().range - 0.7).abs() < 1e-6);
         let t = b.texture.as_ref().unwrap();
         assert_eq!((t.name.as_str(), t.depth, t.invert), ("Bubbles", -2.0, true));
+    }
+
+    #[test]
+    fn bevel_texture_is_copied_into_the_document_and_shading_is_settable() {
+        let mut s = session();
+        let p = json!({"texture": "Paper Noise", "highlightColor": "#ffcc00", "highlightBlend": "colorDodge", "highlightOpacity": 40, "shadowColor": "#001020", "shadowOpacity": 90, "useGlobalLight": false, "angle": 45});
+        s.execute("layer.layerStyle.bevelEmboss", p).unwrap();
+        let fx = effects(&s);
+        let Effect::BevelEmboss(b) = &fx[0] else { panic!("{fx:?}") };
+        let lib = s.patterns.items.iter().find(|q| q.name == "Paper Noise").unwrap().id.clone();
+        assert_eq!(b.texture.as_ref().unwrap().id, lib, "the texture names the library pattern by id");
+        assert!(s.active().unwrap().doc.patterns.iter().any(|q| q.id == lib), "and the document carries it, so it renders");
+        assert_eq!(b.highlight_color, Color::rgb(1.0, 0.8, 0.0));
+        assert_eq!((b.highlight.blend, b.highlight.opacity), (BlendMode::ColorDodge, 0.4));
+        assert_eq!(b.shadow_color, Color::rgb(0.0, 16.0 / 255.0, 32.0 / 255.0));
+        assert!((b.shadow.opacity - 0.9).abs() < 1e-6 && b.shadow.blend == BlendMode::Multiply);
+        assert!(!b.use_global_light && b.angle == 45.0);
+        // Stacked bevels each keep their own texture; an unknown one stays and copies nothing.
+        s.execute("layer.layerStyle.bevelEmboss", json!({"add": true, "texture": "Nope", "size": 3})).unwrap();
+        assert_eq!(effects(&s).len(), 2);
+        assert_eq!(s.active().unwrap().doc.patterns.len(), 1);
     }
 
     #[test]
@@ -874,6 +915,24 @@ mod tests {
     }
 
     #[test]
+    fn replace_sets_and_keeps_the_custom_order() {
+        let mut s = session();
+        let custom = |s: &Session| {
+            let st = s.active().unwrap();
+            st.doc.layer(st.active_layer.unwrap()).unwrap().effects.custom_order
+        };
+        let list = json!([{"kind": "colorOverlay"}, {"kind": "innerShadow"}]);
+        s.execute("layer.layerStyle.replace", json!({"effects": list, "customOrder": true})).unwrap();
+        assert!(custom(&s));
+        assert!(matches!(effects(&s)[0], Effect::ColorOverlay { .. }), "the list keeps its order");
+        // Without `customOrder` the layer keeps its setting; false goes back to Photoshop's order.
+        s.execute("layer.layerStyle.replace", json!({"effects": list})).unwrap();
+        assert!(custom(&s));
+        s.execute("layer.layerStyle.replace", json!({"effects": list, "customOrder": false})).unwrap();
+        assert!(!custom(&s));
+    }
+
+    #[test]
     fn replace_rejects_bad_entries_gracefully() {
         let mut s = session();
         let stroke = Effect::Stroke(StrokeFx {
@@ -891,6 +950,7 @@ mod tests {
             json!({"effects": [{"kind": "stroke", "fx": 3}]}),
             json!({"effects": [{"kind": "dropShadow", "fx": snapshot(&stroke)}]}),
             json!({"effects": [{"kind": "stroke", "fx": snapshot(&stroke), "params": "nope"}]}),
+            json!({"effects": [], "customOrder": "yes"}),
         ] {
             assert!(s.execute("layer.layerStyle.replace", p).is_err());
         }

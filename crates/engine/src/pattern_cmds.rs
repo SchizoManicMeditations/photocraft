@@ -148,6 +148,18 @@ pub fn resolve_effect(s: &Session, fx: photocraft_doc::Effect) -> Result<(photoc
             let pat = resolve(s, &key).ok_or_else(|| bad("layer.layerStyle.patternOverlay", format!("no pattern \"{key}\" (see pattern.list)")))?;
             Ok((Effect::PatternOverlay { common, name: pat.name.clone(), id: pat.id.clone(), scale, angle, link, phase }, Some(pat)))
         }
+        // A bevel texture renders from the document's patterns, so it is copied in too. An
+        // unknown one is kept as is (it may arrive with the document later) and draws flat.
+        Effect::BevelEmboss(mut b) => {
+            let pat = b.texture.as_mut().and_then(|t| {
+                // An empty key would pick the first library pattern: never guess a texture.
+                let pat = [&t.id, &t.name].into_iter().filter(|k| !k.is_empty()).find_map(|k| resolve(s, k))?;
+                t.name = pat.name.clone();
+                t.id = pat.id.clone();
+                Some(pat)
+            });
+            Ok((Effect::BevelEmboss(b), pat))
+        }
         other => Ok((other, None)),
     }
 }

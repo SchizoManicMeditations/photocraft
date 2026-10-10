@@ -46,6 +46,23 @@ fn style_preset_new_from_an_explicit_effect_list() {
     assert!(s.execute("style.presets.new", json!({"effects": ["stroke"]})).is_err());
 }
 
+#[test]
+fn style_preset_new_from_params_needs_no_document() {
+    // An install script runs before any document is open.
+    let mut s = Session::new();
+    let fx = json!([["outerGlow", {"color": "#39ff4f", "size": 20}]]);
+    let r = s.execute("style.presets.new", json!({"name": "Glow", "group": "Script", "effects": fx, "fillOpacity": 55})).unwrap();
+    assert_eq!(r["group"], json!("Script"));
+    let list = s.execute("style.presets.list", json!({})).unwrap();
+    let group = list["groups"].as_array().unwrap().iter().find(|g| g["name"] == "Script").unwrap();
+    assert_eq!(group["presets"][0]["name"], json!("Glow"));
+    assert_eq!(group["presets"][0]["fillOpacity"], json!(55.0));
+    assert_eq!(group["presets"][0]["blend"], Value::Null, "no layer to take blending from");
+    // Capturing a layer's own style still needs one.
+    assert!(s.execute("style.presets.new", json!({"name": "From layer"})).is_err());
+    assert!(s.execute("style.presets.new", json!({"effects": fx, "layer": 99})).is_err());
+}
+
 // ------------------------------------------------------------------ gradients
 
 #[test]

@@ -3317,3 +3317,9 @@ fontWeight	Italic	斜体
 	Cycle Orientation	方向を切り替え
 	Set the overlay options for the Crop tool	切り抜きツールのオーバーレイオプションを設定
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt+クリックはデスクトップに取られました（Alt+ドラッグでウィンドウを移動する設定です）。デスクトップのウィンドウ移動キーを Super に変更するか、ウィンドウ › 修飾キーで Alt を固定してください。
+
+# Layer Style > effect order (PhotoCraft: a reorderable stack)
+	Move Effect Up	効果を上へ移動
+	Move Effect Down	効果を下へ移動
+	Reset Order	順序をリセット
+	Stack the effects in Photoshop's order	効果を Photoshop の順序で重ねる
