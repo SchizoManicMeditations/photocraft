@@ -10,7 +10,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use photocraft_color::{BlendMode, PixelFormat};
+use photocraft_color::{BlendMode, PixelFormat, SampleType};
 use photocraft_geom::Rect;
 use photocraft_raster::{Surface, from_rgba_into, to_rgba};
 
@@ -20,6 +20,22 @@ use crate::retouch::{Footprint, alpha_index, over_native};
 use crate::rng::hash2;
 use crate::tile::{Mips, PatternImage};
 use crate::{Dab, StrokePoint, dab_coverage, tip_falloff};
+
+/// Salt of the 8-bit dither's per-pixel noise.
+const DITHER_SALT: u64 = 0x0000_6469_7468_6572;
+
+/// Before a stroke's result is quantised to 8 bits, offset every channel of the pixel by the same
+/// deterministic noise of under half a level, so fractional values round up or down in proportion
+/// (a soft, low-flow stroke's fine gradient survives as grain instead of bands). A value already on
+/// an 8-bit level still rounds back to itself, and because the noise depends only on the pixel's
+/// position, the live preview, the commit and a replay all agree.
+#[inline]
+fn dither8(px: &mut [f32], x: i32, y: i32) {
+    let d = (hash2(x, y, DITHER_SALT) - 0.5) / 255.0;
+    for v in px.iter_mut() {
+        *v += d;
+    }
+}
 
 /// Edge of a stroke-buffer tile.
 pub const COV_TILE: i32 = 64;
@@ -627,6 +643,15 @@ impl StrokeRenderer {
         self.raster_pending();
     }
 
+    /// The primary dabs finishing the stroke now would add, without finishing it: for live
+    /// previews of sequential-dab tools, which run each dab themselves (see [`tail_preview`](Self::tail_preview)).
+    pub fn tail_dabs(&self) -> Vec<Dab> {
+        let mut generator = self.generator.clone();
+        let (mut dabs, mut duals) = (Vec::new(), Vec::new());
+        generator.finish(&mut dabs, &mut duals);
+        dabs
+    }
+
     /// What finishing the stroke now would add (the smoothing catch-up tail to the last point, or
     /// a lone first dab), for live previews: a renderer holding copies of the coverage tiles the
     /// tail touches with the tail rendered in, so its `composite` draws exactly those tiles as
@@ -768,6 +793,9 @@ impl StrokeRenderer {
         if let Some(a) = a_idx {
             src[a] = b.color[3];
         }
+        // 8-bit targets: the pixels the stroke changes are dithered as they are quantised, so
+        // soft, low-flow strokes don't band (see `dither8`).
+        let dither = fmt.sample == SampleType::U8;
         let mut dmg = Rect::EMPTY;
         let mut region = Vec::new();
         for (tx, ty) in keys {
@@ -804,6 +832,9 @@ impl StrokeRenderer {
                         if let (Some(a), false) = (a_idx, lock_transparency) {
                             px[a] *= 1.0 - k;
                         }
+                        if dither {
+                            dither8(px, x, y);
+                        }
                         continue;
                     }
                     if lock_transparency && a_idx.is_some_and(|a| px[a] <= 0.0) {
@@ -827,6 +858,9 @@ impl StrokeRenderer {
                         let mut enc = [0.0f32; 8];
                         from_rgba_into(&fmt, o, &mut enc);
                         px.copy_from_slice(&enc[..n]);
+                    }
+                    if dither {
+                        dither8(px, x, y);
                     }
                 }
             }

@@ -130,6 +130,19 @@ fn arrange_layouts_floating_windows_and_matching() {
 }
 
 #[test]
+fn two_up_and_stacked_cells_keep_their_existing_boundaries() {
+    let rect = egui::Rect::from_min_max(egui::pos2(40.0, 75.0), egui::pos2(940.0, 675.0));
+    let region = |left, top, right, bottom| egui::Rect::from_min_max(egui::pos2(left, top), egui::pos2(right, bottom));
+    assert_eq!(cells("twoUpVertical", rect, 2).unwrap(), vec![region(40.0, 75.0, 490.0, 675.0), region(490.0, 75.0, 940.0, 675.0)]);
+    assert_eq!(cells("twoUpHorizontal", rect, 2).unwrap(), vec![region(40.0, 75.0, 940.0, 375.0), region(40.0, 375.0, 940.0, 675.0)]);
+    assert_eq!(
+        cells("threeUpStacked", rect, 3).unwrap(),
+        vec![region(40.0, 75.0, 490.0, 675.0), region(490.0, 75.0, 940.0, 375.0), region(490.0, 375.0, 940.0, 675.0)]
+    );
+    assert!(cells("twoUpVertical", rect, 1).is_none());
+}
+
+#[test]
 fn window_panels_select_dock_tabs() {
     let (mut app, ctx) = app_with(1);
     menu(&mut app, &ctx, "window.panel.info", json!({})).unwrap();

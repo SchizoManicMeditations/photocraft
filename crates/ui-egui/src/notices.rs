@@ -266,7 +266,7 @@ mod tests {
         // the current language); `tr` with an explicit language leaves the process-wide language,
         // which other tests running in parallel draw with, untouched
         let es = crate::i18n::Lang::from_code("es").unwrap();
-        assert_eq!(crate::i18n::tr(es, &notice.title), "El arrastrar y soltar archivos de forma nativa no está disponible en Wayland");
+        assert_eq!(crate::i18n::tr(es, &notice.title), "Arrastrar y soltar archivos de forma nativa no está disponible en Wayland");
         assert_ne!(crate::i18n::tr(es, &notice.lines[0]), notice.lines[0]);
         assert_eq!(crate::i18n::tr(crate::i18n::Lang::EN, &notice.title), "Native file drag-and-drop is unavailable");
     }

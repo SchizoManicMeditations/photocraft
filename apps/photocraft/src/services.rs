@@ -197,25 +197,36 @@ fn export_options(settings: &photocraft_ui_egui::ExportSettings) -> photocraft_i
     }
     opts.tiff_layers = settings.tiff_layers;
     opts.xmp = if settings.xmp_all { photocraft_io::XmpEmbed::All } else { photocraft_io::XmpEmbed::None };
+    opts.tga_bits = settings.tga_bits;
     opts
 }
 
-/// A save on a worker thread (`Services::save_file`, #2017): encode, then write atomically.
-/// Cancelling while encoding leaves the file on disk untouched; once writing starts the save
-/// can't be cancelled.
-fn save_file(
+/// A save on a worker thread (`Services::save_file` and `Services::automation_save`, #2017):
+/// encode, then write through `write`. Cancelling while encoding leaves the target untouched;
+/// once writing starts the save can't be cancelled.
+fn save_through(
     doc: &Document,
     path: &str,
     settings: &photocraft_ui_egui::ExportSettings,
     ctl: &photocraft_ui_egui::jobs_ui::SaveCtl,
+    write: impl Fn(&str, &[u8]) -> Result<(), String>,
 ) -> Result<Vec<String>, String> {
     ctl.progress(0.0, "Encoding");
     let opts = export_options(settings);
     let r = crate::crash_guard::guard("Save", || photocraft_io::export(doc, path, &opts).map_err(|e| e.to_string()))?;
     ctl.commit()?;
     ctl.progress(0.0, "Writing");
-    write_atomic(Path::new(path), &r.bytes)?;
+    write(path, &r.bytes)?;
     Ok(r.warnings)
+}
+
+fn save_file(
+    doc: &Document,
+    path: &str,
+    settings: &photocraft_ui_egui::ExportSettings,
+    ctl: &photocraft_ui_egui::jobs_ui::SaveCtl,
+) -> Result<Vec<String>, String> {
+    save_through(doc, path, settings, ctl, |p, b| write_atomic(Path::new(p), b))
 }
 
 type SharedRecovery = Rc<RefCell<Option<RecoveryStore>>>;
@@ -315,6 +326,18 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
     let automation_write = automation.clone().map(|workspace| {
         Box::new(move |path: &str, bytes: &[u8]| workspace.write(path, bytes).map_err(|error| error.to_string())) as photocraft_ui_egui::AutomationWriteFn
     });
+    let automation_open_pcraft = automation.clone().map(|workspace| {
+        Box::new(move |path: &str| {
+            let name = Path::new(path).file_name().and_then(|name| name.to_str()).unwrap_or(path).to_string();
+            let opened = crate::crash_guard::guard("Open", || workspace.open_pcraft(path).map_err(|e| e.to_string()))?;
+            Ok(opened.map(|doc| (name, doc)))
+        }) as photocraft_ui_egui::AutomationOpenPcraftFn
+    });
+    let automation_save = automation.clone().map(|workspace| {
+        std::sync::Arc::new(move |doc: &Document, path: &str, settings: &photocraft_ui_egui::ExportSettings, ctl: &photocraft_ui_egui::jobs_ui::SaveCtl| {
+            save_through(doc, path, settings, ctl, |p, b| workspace.write(p, b).map_err(|e| e.to_string()))
+        }) as photocraft_ui_egui::SaveFileFn
+    });
     let step: fn(&str, &serde_json::Value) -> photocraft_engine::Result<()> = photocraft_automation::workspace::authorize_desktop_engine_step;
     let automation_authorize = automation.is_some().then_some(step);
     let automation_command = automation.map(|_| {
@@ -337,6 +360,8 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         write: Some(Box::new(|path: &str, bytes: &[u8]| write_atomic(Path::new(path), bytes))),
         automation_read,
         automation_write,
+        automation_open_pcraft,
+        automation_save,
         automation_command,
         automation_authorize,
         encode_png: Some(Box::new(|w, h, rgba| {
@@ -345,6 +370,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         })),
         inbox: None,
         open_url: Some(Box::new(|url: &str| open::that(url).map_err(|e| e.to_string()))),
+        beep: Some(platform_beep),
         clipboard_set_image: Some({
             let clip = clip.clone();
             Box::new(move |w: u32, h: u32, px: &[u8]| {
@@ -388,6 +414,21 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         preset_store: None,
         is_wayland: false,
         ..recovery_services(recovery_dir())
+    }
+}
+
+/// Preferences ▸ General ▸ Beep When Done: the platform's default information beep.
+fn platform_beep() {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = winsafe::MessageBeep(winsafe::co::MBP::OK);
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        // No beep API among this app's other platforms' dependencies: write the terminal bell
+        // (audible when launched from a terminal, which is the same cue macOS terminals use).
+        use std::io::Write as _;
+        let _ = std::io::stdout().write_all(b"\x07").and_then(|()| std::io::stdout().flush());
     }
 }
 

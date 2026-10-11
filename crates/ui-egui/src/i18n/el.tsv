@@ -2,6 +2,24 @@
 # Columns separated by TAB: context, English source, Greek translation.
 # Original translations based on general Greek graphics/computing terminology.
 # Covers every source label the i18n coverage check lists.
+
+# Guide layout dialog
+	Rows	Γραμμές
+	Number	Πλήθος
+	Top:	Επάνω:
+	Left:	Αριστερά:
+	Bottom:	Κάτω:
+	Right:	Δεξιά:
+	Target:	Στόχος:
+	Selected Artboards	Επιλεγμένοι πίνακες γραφικών
+	Center Columns	Κεντράρισμα στηλών
+	Clear Existing Guides	Διαγραφή υπαρχόντων οδηγών
+	Invalid guide layout	Μη έγκυρη διάταξη οδηγών
+	Leave empty for automatic size	Αφήστε κενό για αυτόματο μέγεθος
+	5 Columns, 3 Rows	5 στήλες, 3 γραμμές
+	8 Columns	8 στήλες
+	12 Columns	12 στήλες
+
 	File	Αρχείο
 	Edit	Επεξεργασία
 	Image	Εικόνα
@@ -1060,6 +1078,9 @@
 	Enable {name}	Ενεργοποίηση: {name}
 	Hold Alt while drawing for straight segments	Κρατήστε πατημένο το Alt κατά τη σχεδίαση για ευθύγραμμα τμήματα
 	TIFF Options	Επιλογές TIFF
+	Targa Options	Επιλογές Targa
+	24 bits/pixel	24 bit/εικονοστοιχείο
+	32 bits/pixel	32 bit/εικονοστοιχείο
 	Including layers will increase file size.	Η συμπερίληψη επιπέδων θα αυξήσει το μέγεθος του αρχείου.
 	Discard Layers and Save a Copy	Απόρριψη επιπέδων και αποθήκευση αντιγράφου
 	Don't show again	Να μην εμφανιστεί ξανά
@@ -1547,7 +1568,9 @@
 	Cancelled opening {name}	Ακυρώθηκε το άνοιγμα του {name}
 	Cancelled {label}	Ακυρώθηκε: {label}
 	Esc to cancel	Esc για ακύρωση
+	Opened {name}	Άνοιξε το {name}
 	Opening {name}	Άνοιγμα του {name}
+	Saved {name}	Αποθηκεύτηκε το {name}
 	Saving {name}	Αποθήκευση του {name}
 	A save to {name} is still running; try again when it finishes	Η αποθήκευση στο {name} βρίσκεται ακόμη σε εξέλιξη· δοκιμάστε ξανά όταν ολοκληρωθεί
 	{label} is writing the file and can no longer be cancelled	{label}: γίνεται εγγραφή του αρχείου και δεν μπορεί πλέον να ακυρωθεί
@@ -1583,6 +1606,7 @@
 	Cache tile size	Μέγεθος πλακιδίου προσωρινής μνήμης
 	Camera Raw Defaults	Προεπιλογές Camera Raw
 	Canvas border	Περίγραμμα καμβά
+	Show canvas dots	Εμφάνιση κουκκίδων καμβά
 	Canvas color	Χρώμα καμβά
 	Canvas custom color	Προσαρμοσμένο χρώμα καμβά
 	Color picker	Επιλογέας χρώματος
@@ -1896,6 +1920,8 @@
 	White Balance: As Shot	Ισορροπία λευκού: όπως στη λήψη
 	Mixer Brush	Πινέλο ανάμειξης (Mixer Brush)
 	Mixer Brush Tool	Πινέλο ανάμειξης (Mixer Brush Tool)
+	Color Replacement Tool	Αντικατάσταση χρώματος (Color Replacement Tool)
+	Color Replacement	Αντικατάσταση χρώματος
 	Wet	Υγρασία
 	Load	Φόρτωση
 	Mix	Ανάμειξη
@@ -2013,6 +2039,8 @@
 	Bend:	Καμπυλότητα:
 	Bicubic	Δικυβικό
 	Bicubic (smooth gradients)	Δικυβική (ομαλές διαβαθμίσεις)
+	Bicubic Smoother (enlargement)	Δικυβική πιο ομαλή (μεγέθυνση)
+	Bicubic Sharper (reduction)	Δικυβική πιο ευκρινής (σμίκρυνση)
 	Bilinear	Διγραμμική
 	Black Point Compensation	Αντιστάθμιση μαύρου σημείου
 	Black, White	Μαύρο, λευκό
@@ -2759,8 +2787,12 @@
 	Print resolution	Ανάλυση εκτύπωσης
 	Printer	Εκτυπωτής
 	Pro (Dark)	Pro (σκοτεινό)
+	Pro (Light)	Pro (φωτεινό)
+	Pro (Light Gray)	Pro (ανοιχτό γκρι)
 	Pro (Medium Gray)	Pro (μεσαίο γκρι)
 	Pro Medium Gray Theme	Θέμα Pro μεσαίου γκρι
+	Pro Light Gray Theme	Θέμα Pro ανοιχτού γκρι
+	Pro Light Theme	Φωτεινό θέμα Pro
 	Pro Theme	Θέμα Pro
 	Profile	Προφίλ
 	Progressive	Προοδευτικό
@@ -2842,6 +2874,9 @@
 	Reset Transform	Επαναφορά μετασχηματισμού
 	Reset View	Επαναφορά προβολής
 	Reset Workspace	Επαναφορά χώρου εργασίας
+	Reset Tool	Επαναφορά εργαλείου
+	Reset All Tools	Επαναφορά όλων των εργαλείων
+	Reset all tools to their default settings?	Επαναφορά όλων των εργαλείων στις προεπιλεγμένες ρυθμίσεις τους;
 	Reset to defaults	Επαναφορά προεπιλογών
 	Resize image during place	Αλλαγή μεγέθους εικόνας κατά την τοποθέτηση
 	Resolution:	Ανάλυση:
@@ -3233,6 +3268,8 @@ cameraRaw	Yellow	Κίτρινο
 	Healing Brush Tool	Πινέλο επιδιόρθωσης (Healing Brush Tool)
 	History Brush Tool	Πινέλο ιστορικού (History Brush Tool)
 	Horizontal Type Tool	Οριζόντιο κείμενο (Horizontal Type Tool)
+	Horizontal Type Mask Tool	Μάσκα οριζόντιου κειμένου (Horizontal Type Mask Tool)
+	Vertical Type Mask Tool	Μάσκα κατακόρυφου κειμένου (Vertical Type Mask Tool)
 	Lasso Tool	Λάσο (Lasso Tool)
 	Line Tool	Γραμμή (Line Tool)
 	Magic Eraser Tool	Μαγική γόμα (Magic Eraser Tool)
@@ -3245,7 +3282,12 @@ cameraRaw	Yellow	Κίτρινο
 	Paint Bucket Tool	Κουβάς γεμίσματος (Paint Bucket Tool)
 	Path Selection Tool	Επιλογή διαδρομής (Path Selection Tool)
 	Direct Selection Tool	Άμεση επιλογή (Direct Selection Tool)
+	Add Anchor Point Tool	Εργαλείο προσθήκης σημείου αγκύρωσης
+	Delete Anchor Point Tool	Εργαλείο διαγραφής σημείου αγκύρωσης
+	Click a segment to add an anchor point · {alt}-click an anchor to delete it	Κάντε κλικ σε ένα τμήμα για να προσθέσετε σημείο αγκύρωσης · {alt}-κλικ σε σημείο αγκύρωσης για διαγραφή
+	Click an anchor point to delete it · {alt}-click a segment to add one	Κάντε κλικ σε ένα σημείο αγκύρωσης για να το διαγράψετε · {alt}-κλικ σε τμήμα για προσθήκη
 	Pen Tool	Πένα (Pen Tool)
+	Convert Point Tool	Μετατροπή σημείου (Convert Point Tool)
 	Polygon Tool	Πολύγωνο (Polygon Tool)
 	Polygonal Lasso Tool	Πολυγωνικό λάσο (Polygonal Lasso Tool)
 	Quick Selection Tool	Γρήγορη επιλογή (Quick Selection Tool)
@@ -3377,6 +3419,19 @@ cameraRaw	Yellow	Κίτρινο
 	Could not open	Δεν ήταν δυνατό το άνοιγμα
 	Default PhotoCraft Size	Προεπιλεγμένο μέγεθος PhotoCraft
 	Diagonal (Descending)	Διαγώνιος (φθίνουσα)
+	Contour Editor	Επεξεργαστής περιγράμματος
+	Anti-aliased	Εξομάλυνση
+	Corner	Γωνία
+	Gloss Contour	Περίγραμμα γυαλάδας
+	Contour	Περίγραμμα
+	Cone - Inverted	Κώνος - ανεστραμμένος
+	Cove - Deep	Όρμος - βαθύς
+	Cove - Shallow	Όρμος - ρηχός
+	Half Round	Ημικύκλιο
+	Ring - Double	Δακτύλιος - διπλός
+	Rolling Slope - Descending	Κυματιστή κλίση - φθίνουσα
+	Rounded Steps	Στρογγυλεμένα σκαλοπάτια
+	Sawtooth 1	Πριονωτό 1
 	DirectX 12	DirectX 12
 	Display p3	Display P3
 	Divide	Διαίρεση
@@ -3399,6 +3454,8 @@ cameraRaw	Yellow	Κίτρινο
 	Pattern Stamp Tool	Σφραγίδα μοτίβου (Pattern Stamp Tool)
 	Png	PNG
 	Pro	Pro
+	Pro light	Pro φωτεινό
+	Pro light gray	Pro ανοιχτό γκρι
 	Pro medium	Pro μεσαίο
 	Pro photo	ProPhoto
 	Red Eye	Κόκκινα μάτια
@@ -3540,12 +3597,62 @@ fontWeight	Thin	Πολύ λεπτά
 	Quick Selection found nothing there	Η Γρήγορη επιλογή δεν βρήκε τίποτα εκεί
 	Object Selection found nothing there — try a tighter rectangle	Η Επιλογή αντικειμένου δεν βρήκε τίποτα εκεί — δοκιμάστε ένα πιο στενό ορθογώνιο
 	No subject found — try a rectangle around the object	Δεν βρέθηκε θέμα — δοκιμάστε ένα ορθογώνιο γύρω από το αντικείμενο
+	Appearance Settings…	Ρυθμίσεις εμφάνισης…
+	Add to favorites	Προσθήκη στα αγαπημένα
+	Remove from favorites	Αφαίρεση από τα αγαπημένα
+# File Info ▸ Camera Data (read-only EXIF fields; "Make" is the camera maker, not the verb).
+cameraData	Make	Κατασκευαστής
+cameraData	Model	Μοντέλο
+cameraData	Date Taken	Ημερομηνία λήψης
+cameraData	Exposure	Χρόνος έκθεσης
+cameraData	F-Stop	Διάφραγμα
+cameraData	ISO Speed	Ευαισθησία ISO
+cameraData	Focal Length	Εστιακή απόσταση
+cameraData	Focal Length (35 mm)	Εστιακή απόσταση (35 mm)
+cameraData	Lens	Φακός
+# Shared panel docking
+	Activate Panel	Ενεργοποίηση πάνελ
+	Change Panel Group	Αλλαγή ομάδας πάνελ
+	Change Panel Layout	Αλλαγή διάταξης πάνελ
+	Close Panel	Κλείσιμο πάνελ
+	Dock Panel	Αγκύρωση πάνελ
+	Float Panel	Αιωρούμενο πάνελ
+	Move Panel	Μετακίνηση πάνελ
+	Group with	Ομαδοποίηση με
+	Panel menu	Μενού πάνελ
+	Resize panel window	Αλλαγή μεγέθους παραθύρου πάνελ
+	Resize panels	Αλλαγή μεγέθους πάνελ
 	Use Classic Mode	Χρήση κλασικής λειτουργίας
 	Auto Center Preview	Αυτόματο κεντράρισμα προεπισκόπησης
 	Next Document	Επόμενο έγγραφο
 	Previous Document	Προηγούμενο έγγραφο
 	W x H x Resolution	Π x Υ x Ανάλυση
 	Front Image	Μπροστινή εικόνα
+	Frame Tool	Εργαλείο πλαισίου
+	Create a new rectangular frame	Δημιουργία νέου ορθογώνιου πλαισίου
+	Create a new elliptical frame	Δημιουργία νέου ελλειπτικού πλαισίου
+	Include in playback	Συμπερίληψη στην αναπαραγωγή
+	Perspective Crop Tool	Περικοπή προοπτικής (Perspective Crop Tool)
+	Drag a box or click four corners · drag the corners onto the edges of a skewed shape · {commit} commits · Esc cancels	Σύρετε ένα πλαίσιο ή κάντε κλικ σε τέσσερις γωνίες · σύρετε τις γωνίες στις άκρες ενός λοξού σχήματος · {commit} για εφαρμογή · Esc για ακύρωση
+	Artboard Tool	Πίνακας σχεδίασης (Artboard Tool)
+	Make Portrait	Κατακόρυφος προσανατολισμός
+	Make Landscape	Οριζόντιος προσανατολισμός
+	Add New Artboard	Προσθήκη νέου πίνακα σχεδίασης
+	W	Π
+	H	Υ
+	Freeform Pen Tool	Πένα ελεύθερης σχεδίασης
+	Curvature Pen Tool	Πένα καμπυλότητας
+	Curve Fit:	Προσαρμογή καμπύλης:
+	Drag: draw freehand · Release on the start point: close	Σύρσιμο: ελεύθερη σχεδίαση · Άφημα στο αρχικό σημείο: κλείσιμο
+	Click: smooth point · Double-click: corner · Drag a point: move · Click first point: close · {key} finish	Κλικ: ομαλό σημείο · Διπλό κλικ: γωνία · Σύρσιμο σημείου: μετακίνηση · Κλικ στο πρώτο σημείο: κλείσιμο · {key}: τέλος
+	New Crop Preset…	Νέα προεπιλογή περικοπής…
+	Delete Crop Preset…	Διαγραφή προεπιλογής περικοπής…
+	Select the crop presets to delete:	Επιλέξτε τις προεπιλογές περικοπής για διαγραφή:
+	Select the crop presets to delete	Επιλέξτε τις προεπιλογές περικοπής για διαγραφή
+	Enter a name for the crop preset	Εισαγάγετε ένα όνομα για την προεπιλογή περικοπής
+	There is no crop size or ratio to save	Δεν υπάρχει μέγεθος ή αναλογία περικοπής για αποθήκευση
+	Scale:	Κλίμακα:
+	Snap to Origin	Προσκόλληση στην αρχή
 	Search settings…	Αναζήτηση ρυθμίσεων…
 	No matching settings	Δεν βρέθηκαν ρυθμίσεις
 # Layer Style > effect order (PhotoCraft: a reorderable stack)
@@ -3553,3 +3660,23 @@ fontWeight	Thin	Πολύ λεπτά
 	Move Effect Down	Μετακίνηση εφέ κάτω
 	Reset Order	Επαναφορά σειράς
 	Stack the effects in Photoshop's order	Στοίβαξη των εφέ με τη σειρά του Photoshop
+# Select and Mask view modes (#1754)
+	Onion Skin	Φλούδα κρεμμυδιού
+	Marching Ants	Κινούμενο περίγραμμα
+	On Black	Σε μαύρο
+	On White	Σε λευκό
+	On Layers	Σε επίπεδα
+	Show Edge	Εμφάνιση άκρης
+	Show Original	Εμφάνιση αρχικού
+	F cycles the views; hold X to see the image	Το F εναλλάσσει τις προβολές· κρατήστε το X για να δείτε την εικόνα
+# Select and Mask Refine Edge Brush (#2972)
+	Refine Edge Brush (R)	Πινέλο βελτίωσης ακμής (R)
+	Expand Detection Area	Επέκταση περιοχής ανίχνευσης
+	Restore Original Edge	Επαναφορά αρχικής ακμής
+	Paint over hair or fur on the image; Alt paints the other mode	Βάψτε πάνω σε μαλλιά ή γούνα στην εικόνα· το Alt βάφει με την άλλη λειτουργία
+	Clear Brush Strokes	Απαλοιφή πινελιών
+	Show rulers	Εμφάνιση χαράκων
+
+# Color Sampler (added with the i18n coverage repair)
+	Click to place · Alt-click or drag off-canvas to remove	Κλικ για τοποθέτηση · Alt-κλικ ή σύρσιμο εκτός καμβά για αφαίρεση
+	{n} of {max} sample points	{n} από {max} σημεία δειγματοληψίας

@@ -135,6 +135,42 @@ fn save_a_copy_keeps_path_and_dirty_state() {
     assert!(s.execute("file.saveACopy", json!({})).is_err());
 }
 
+/// `tgaBits` picks the Targa's bits per pixel (byte 16 of the header); unset, a document with an
+/// alpha channel is written as 32-bit, with the channel as the alpha.
+#[test]
+fn save_a_copy_writes_the_targa_bits_asked_for() {
+    let dir = tmp("tga-bits");
+    let mut s = session(20, 10, 8);
+    s.execute("select.all", json!({})).unwrap();
+    s.execute("select.saveSelection", json!({})).unwrap();
+    for (params, bpp) in [(json!({}), 32), (json!({"tgaBits": 24}), 24), (json!({"tgaBits": 32}), 32), (json!({"tgaBits": null}), 32)] {
+        let out = join(&dir, "a.tga");
+        let mut p = params.clone();
+        p["path"] = json!(out);
+        s.execute("file.saveACopy", p).unwrap();
+        let bytes = std::fs::read(&out).unwrap();
+        assert_eq!(bytes[16], bpp, "{params}");
+        let back = photocraft_io::import("a.tga", &bytes).unwrap().document;
+        assert_eq!(back.channels.len(), usize::from(bpp == 32), "{params}: the selection reopens as Alpha 1");
+    }
+}
+
+/// A `tgaBits` other than 24 or 32 is a bad parameter, reported before anything is written.
+#[test]
+fn bad_targa_bits_are_refused_before_writing() {
+    let dir = tmp("tga-bad");
+    let mut s = session(8, 8, 8);
+    for bad in [json!(16), json!(0), json!(-32), json!(32.5), json!("32"), json!(true), json!([32])] {
+        let out = join(&dir, "a.tga");
+        let r = s.execute("file.saveACopy", json!({"path": out, "tgaBits": bad}));
+        assert!(matches!(r, Err(EngineError::BadParams { .. })), "{bad}: {r:?}");
+        assert!(!std::path::Path::new(&out).exists(), "{bad}: nothing written");
+        let r = s.execute("file.export.layersToFiles", json!({"dir": dir, "format": "tga", "tgaBits": bad}));
+        assert!(matches!(r, Err(EngineError::BadParams { .. })), "{bad}: {r:?}");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "{bad}: no layer written");
+    }
+}
+
 #[test]
 fn open_as_forces_the_decoder() {
     let dir = tmp("openas");
@@ -178,6 +214,28 @@ fn place_embedded_centres_fits_and_embeds() {
         assert!(s.undo() && s.undo());
         assert_eq!(doc(&s).layers.len(), 1);
     }
+}
+
+/// Preferences ▸ General ▸ Always Create Smart Objects When Placing: unchecked, an embedded place
+/// lands as a plain pixel layer; a linked place is always a smart object and `"smartObject"` wins.
+#[test]
+fn always_create_smart_objects_preference_places_a_pixel_layer() {
+    let dir = tmp("place-smart-pref");
+    let big = png(&dir, "big.png", 200, 100, "#ff0000");
+    let mut s = session(100, 100, 8);
+    s.execute("prefs.set", json!({"path": "general.alwaysCreateSmartObjectsWhenPlacing", "value": false})).unwrap();
+    let r = s.execute("file.placeEmbedded", json!({"path": big})).unwrap();
+    assert_eq!(r["smartObject"], json!(false));
+    let d = s.active().unwrap();
+    let l = d.doc.layer(d.active_layer.unwrap()).unwrap();
+    assert!(matches!(l.content, LayerContent::Raster(_)), "a pixel layer");
+    // Fitted to the canvas width, centred vertically, exactly like the smart-object place.
+    assert!(composite(&s, 50, 50)[0] > 0.99 && composite(&s, 50, 50)[2] < 0.01);
+    assert!(composite(&s, 50, 10)[1] > 0.99, "white background above");
+    // An explicit "smartObject": true overrides, and Place Linked with the preference off still
+    // creates a linked smart object.
+    assert_eq!(s.execute("file.placeEmbedded", json!({"path": big, "smartObject": true})).unwrap()["smartObject"], json!(true));
+    assert_eq!(s.execute("file.placeLinked", json!({"path": big})).unwrap()["smartObject"], json!(true));
 }
 
 /// Preferences ▸ General ▸ Resize Image During Place: off, a larger image keeps its natural size
@@ -258,6 +316,77 @@ fn file_info_round_trips_through_xmp_and_psd() {
     let out = write_file_info(Some(foreign), &json!({"authorTitle": "Artist"}));
     assert!(out.contains("xmp:CreatorTool=\"Other App\""));
     assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
+}
+
+fn camera_exif() -> Vec<u8> {
+    photocraft_algo::exif::build(&photocraft_algo::exif::CameraInfo {
+        make: Some("SONY".into()),
+        model: Some("ILCE-7RM5".into()),
+        lens: Some("24-70mm F2.8".into()),
+        exposure_time: Some(1.0 / 250.0),
+        f_number: Some(8.0),
+        iso: Some(400.0),
+        focal_length: Some(33.1),
+        focal_length_35mm: Some(50.0),
+        date_taken: Some("2024:02:17 12:40:19".into()),
+    })
+}
+
+#[test]
+fn file_info_reads_camera_data_from_jpeg_and_psd_exif() {
+    let mut s = session(8, 8, 8);
+    assert_eq!(s.execute("file.fileInfo", json!({})).unwrap()["camera"], json!({}));
+    s.edit("exif", |doc, _| {
+        doc.metadata.exif = Some(Arc::new(camera_exif()));
+        Ok(())
+    })
+    .unwrap();
+    let want = json!({
+        "make": "SONY", "model": "ILCE-7RM5", "dateTaken": "2024-02-17 12:40:19", "exposure": "1/250 s", "fNumber": "f/8",
+        "iso": "ISO 400", "focalLength": "33.1 mm", "focalLength35mm": "50 mm", "lens": "24-70mm F2.8"
+    });
+    for name in ["x.jpg", "x.psd"] {
+        let (bytes, _) = encode(doc(&s), name, None).unwrap();
+        let back = photocraft_io::import(name, &bytes).unwrap().document;
+        let mut t = Session::new();
+        t.add_document(back, None);
+        assert_eq!(t.execute("file.fileInfo", json!({})).unwrap()["camera"], want, "{name}");
+        // Editing the description fields leaves the read-only camera data alone.
+        let edited = t.execute("file.fileInfo", json!({"title": "Pier", "camera": {"make": "ignored"}})).unwrap();
+        assert_eq!(edited["camera"], want, "{name}");
+    }
+}
+
+#[test]
+fn camera_data_formats_like_photoshop_and_falls_back_to_xmp() {
+    let info = |t: Option<f64>, n: Option<f64>, f: Option<f64>| {
+        let exif = photocraft_algo::exif::build(&photocraft_algo::exif::CameraInfo { exposure_time: t, f_number: n, focal_length: f, ..Default::default() });
+        camera_data(Some(&exif), None)
+    };
+    assert_eq!(info(Some(2.0), Some(2.8), Some(35.0)), json!({"exposure": "2 s", "fNumber": "f/2.8", "focalLength": "35 mm"}));
+    assert_eq!(info(Some(0.5), Some(5.6), None), json!({"exposure": "1/2 s", "fNumber": "f/5.6"}));
+    assert_eq!(info(Some(0.4), None, None), json!({"exposure": "0.4 s"}));
+    assert_eq!(info(Some(1.0 / 2000.0), None, None), json!({"exposure": "1/2000 s"}));
+    assert_eq!(info(Some(0.0), Some(0.0), Some(0.0)), json!({}));
+    // No EXIF block (a raw import, XMP-only files): Photoshop's exif:/tiff:/aux: properties.
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:tiff="http://ns.adobe.com/tiff/1.0/" xmlns:exif="http://ns.adobe.com/exif/1.0/" xmlns:aux="http://ns.adobe.com/exif/1.0/aux/"
+ tiff:Make="SONY" tiff:Model="ILCE-7RM5" exif:ExposureTime="1/250" exif:FNumber="8/1" exif:FocalLength="331/10"
+ exif:FocalLengthIn35mmFilm="50" exif:DateTimeOriginal="2024-02-17T12:40:19.00+01:00" aux:Lens="Lens &amp; Co">
+<exif:ISOSpeedRatings><rdf:Seq><rdf:li>400</rdf:li></rdf:Seq></exif:ISOSpeedRatings>
+</rdf:Description></rdf:RDF></x:xmpmeta>"#;
+    let want = json!({
+        "make": "SONY", "model": "ILCE-7RM5", "dateTaken": "2024-02-17 12:40:19", "exposure": "1/250 s", "fNumber": "f/8",
+        "iso": "ISO 400", "focalLength": "33.1 mm", "focalLength35mm": "50 mm", "lens": "Lens & Co"
+    });
+    assert_eq!(camera_data(None, Some(xmp)), want);
+    // EXIF wins; XMP only fills what EXIF lacks.
+    let exif = photocraft_algo::exif::build(&photocraft_algo::exif::CameraInfo { make: Some("Other".into()), ..Default::default() });
+    let both = camera_data(Some(&exif), Some(xmp));
+    assert_eq!(both["make"], "Other");
+    assert_eq!(both["exposure"], "1/250 s");
+    // Garbage in either block reads as no data, never a panic.
+    assert_eq!(camera_data(Some(b"II*\0\xff\xff\xff\xff"), Some("<exif:FNumber>0/0</exif:FNumber> exif:ExposureTime=\"-1/0\"")), json!({}));
 }
 
 const MULTILINGUAL_XMP: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/">

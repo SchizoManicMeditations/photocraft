@@ -48,12 +48,14 @@ impl Transfer {
     fn decode(self, v: f32) -> f32 {
         match self {
             Transfer::Srgb => photocraft_color::convert::srgb_to_linear(v.max(0.0)),
+            Transfer::Gamma(1.0) => v.max(0.0),
             Transfer::Gamma(g) => v.max(0.0).powf(g),
         }
     }
     fn encode(self, v: f32) -> f32 {
         match self {
             Transfer::Srgb => photocraft_color::convert::linear_to_srgb(v.max(0.0)),
+            Transfer::Gamma(1.0) => v.max(0.0),
             Transfer::Gamma(g) => v.max(0.0).powf(1.0 / g),
         }
     }
@@ -116,17 +118,39 @@ pub fn apply_depth(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, depth
             let m = 2f32.powf(*exposure);
             let g = gamma.max(0.01);
             let transfer = transfer.for_exposure();
+            let hdr = depth == Some(SampleType::F32);
             map_rgb(buf, |c| {
                 c.map(|v| {
-                    let lin = (transfer.decode(v) * m + offset).max(0.0).powf(1.0 / g);
+                    if hdr {
+                        // Float documents store linear samples. Photoshop's 32-bit merged
+                        // Exposure oracle also retains negative results with signed gamma.
+                        let lin = v * m + offset;
+                        return if g == 1.0 { lin } else { lin.signum() * lin.abs().powf(1.0 / g) };
+                    }
+                    let lin = (transfer.decode(v) * m + offset).max(0.0);
+                    let lin = if g == 1.0 { lin } else { lin.powf(1.0 / g) };
                     transfer.encode(lin).clamp(0.0, 1.0)
                 })
             })
         }
+        Adjustment::Levels { master, per_channel, space: ToneSpace::Rgb, .. } if depth == Some(SampleType::F32) => {
+            // A 0..1 lookup table cannot represent signed, unbounded float samples.
+            let master_identity = *master == LevelsChannel::default();
+            let channel_identity = per_channel.each_ref().map(|ch| *ch == LevelsChannel::default());
+            if !master_identity || channel_identity.iter().any(|&v| !v) {
+                map_rgb(buf, |c| {
+                    std::array::from_fn(|i| {
+                        let v = if channel_identity[i] { c[i] } else { levels_float(&per_channel[i], c[i]) };
+                        if master_identity { v } else { levels_float(master, v) }
+                    })
+                });
+            }
+        }
         Adjustment::Levels { space, .. } | Adjustment::Curves { space, .. } => {
             let luts = tone_luts_depth(adj, depth);
+            let identity = float_tone_identity(adj, depth);
             match space {
-                ToneSpace::Rgb => map_rgb(buf, |c| std::array::from_fn(|i| lut(&luts[i], c[i]))),
+                ToneSpace::Rgb => map_rgb(buf, |c| std::array::from_fn(|i| if identity[i] { c[i] } else { lut(&luts[i], c[i]) })),
                 ToneSpace::Cmyk | ToneSpace::Lab => map_rgb(buf, |c| tone_in_space(*space, &luts, c)),
             }
         }
@@ -222,6 +246,17 @@ pub fn apply_depth(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, depth
     }
 }
 
+/// Float RGB curve channels with no edit must preserve samples outside the LUT domain.
+/// Edited curves retain the existing spline/LUT behaviour until HDR extrapolation has an oracle.
+pub fn float_tone_identity(adj: &Adjustment, depth: Option<SampleType>) -> [bool; 3] {
+    match adj {
+        Adjustment::Curves { master, per_channel, space: ToneSpace::Rgb, .. } if depth == Some(SampleType::F32) => {
+            std::array::from_fn(|i| photocraft_doc::adjust::is_identity_curve(master) && photocraft_doc::adjust::is_identity_curve(&per_channel[i]))
+        }
+        _ => [false; 3],
+    }
+}
+
 /// Per-channel LUTs of a Levels or Curves adjustment: each channel's record first, then the
 /// master (composite) record, as Photoshop does (psd-tools levels_rgb.psd and curves_rgb.psd,
 /// #975). Four rows: the three `per_channel` channels then black
@@ -251,7 +286,8 @@ pub fn tone_luts_q(adj: &Adjustment, quantum: Option<f32>) -> [Vec<f32>; 4] {
 }
 
 /// [`tone_luts_q`] in a document of `depth` (`None`: unrounded). 32-bit Levels use
-/// [`levels_float`], sampled on 0..1 and kept in 0..1 like every adjustment result here.
+/// [`levels_float`], sampled on 0..1 and kept in 0..1 for LUT consumers. Float RGB rendering
+/// evaluates the formula directly instead, so samples and results outside that domain survive.
 pub fn tone_luts_depth(adj: &Adjustment, depth: Option<SampleType>) -> [Vec<f32>; 4] {
     match (adj, depth) {
         (Adjustment::Levels { master, per_channel, space: ToneSpace::Rgb, .. }, Some(SampleType::F32)) => {
@@ -648,7 +684,7 @@ pub fn levels_q(ch: &LevelsChannel, v: f32, quantum: Option<f32>) -> f32 {
 /// the clipped curve).
 pub fn levels_float(ch: &LevelsChannel, v: f32) -> f32 {
     let t = (v - ch.in_black) / (ch.in_white - ch.in_black).max(1e-6);
-    let t = t.signum() * t.abs().powf(1.0 / ch.gamma.max(0.01));
+    let t = if ch.gamma == 1.0 { t } else { t.signum() * t.abs().powf(1.0 / ch.gamma.max(0.01)) };
     ch.out_black + t * (ch.out_white - ch.out_black)
 }
 
@@ -704,6 +740,41 @@ pub fn curve_lut(points: &[CurvePoint]) -> Vec<f32> {
             (y as f32).clamp(0.0, 1.0)
         })
         .collect()
+}
+
+/// A layer-style contour curve: [`curve_lut`], except that the curve bends sharply at corner
+/// points (`corners[i]` true; Photoshop's Contour Editor "Corner"): each run between corners is
+/// its own natural spline, so all-corner points make a polyline. Missing flags are smooth.
+pub fn contour_curve_lut(points: &[CurvePoint], corners: &[bool]) -> Vec<f32> {
+    let mut pts: Vec<(CurvePoint, bool)> = points.iter().enumerate().map(|(i, p)| (p.clone(), corners.get(i).copied().unwrap_or(false))).collect();
+    if !pts.iter().any(|p| p.1) {
+        return curve_lut(points);
+    }
+    pts.sort_by(|a, b| a.0.input.partial_cmp(&b.0.input).unwrap_or(std::cmp::Ordering::Equal));
+    pts.dedup_by(|a, b| (a.0.input - b.0.input).abs() < 1e-6);
+    let mut out: Vec<f32> = Vec::new();
+    let mut start = 0usize;
+    let last = pts.len().saturating_sub(1);
+    for i in 1..=last {
+        let corner = pts.get(i).is_some_and(|p| p.1);
+        if !(corner || i == last) {
+            continue;
+        }
+        let Some(seg) = pts.get(start..=i) else { break };
+        let from = seg.first().map_or(0.0, |p| p.0.input);
+        let lut = curve_lut(&seg.iter().map(|p| p.0.clone()).collect::<Vec<_>>());
+        if out.is_empty() {
+            out = lut;
+        } else {
+            for (k, (o, v)) in out.iter_mut().zip(lut).enumerate() {
+                if k as f32 / (LUT_SIZE - 1) as f32 >= from {
+                    *o = v;
+                }
+            }
+        }
+        start = i;
+    }
+    if out.is_empty() { curve_lut(points) } else { out }
 }
 
 fn gradient(stops: &[(f32, [f32; 3])], t: f32) -> [f32; 3] {

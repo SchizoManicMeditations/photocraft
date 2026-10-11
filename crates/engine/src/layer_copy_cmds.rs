@@ -8,7 +8,7 @@
 //! document. Pixels are converted to the destination's colour profile (Color Settings' intent and
 //! black point compensation) and bit depth, as Photoshop converts dragged layers.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use photocraft_color::ColorMode;
 use photocraft_doc::{Document, LayerContent, LayerId, SmartContentsId};
@@ -65,6 +65,29 @@ fn center(r: Rect) -> [f64; 2] {
 /// including another opening of the same file), and the pixels convert to `dest`'s profile and
 /// bit depth.
 pub(crate) fn adapt_copies(s: &Session, copies: &mut Document, dest: &Document) -> Result<()> {
+    // Link-group IDs are scoped to a document. Two independently linked pairs can both
+    // use group 1; copying one must not link it to the other's existing layers (#3045).
+    // Remap each imported group once so links within the copied batch stay intact.
+    let mut used: HashSet<u64> = dest.walk().into_iter().filter_map(|(_, _, l)| l.link_group).collect();
+    let mut next_group = dest.unused_link_group().ok_or_else(|| EngineError::Other("no free linked-layer group id".into()))?;
+    let groups: Vec<_> = copies.walk().into_iter().filter_map(|(_, _, l)| l.link_group.map(|group| (l.id, group))).collect();
+    let mut remapped = HashMap::new();
+    for (_, group) in &groups {
+        if remapped.contains_key(group) {
+            continue;
+        }
+        while used.contains(&next_group) {
+            next_group = next_group.checked_add(1).unwrap_or(1);
+        }
+        remapped.insert(*group, next_group);
+        used.insert(next_group);
+        next_group = next_group.checked_add(1).unwrap_or(1);
+    }
+    for (id, group) in groups {
+        if let Some(layer) = copies.layer_mut(id) {
+            layer.link_group = remapped.get(&group).copied();
+        }
+    }
     let mut contents = HashMap::new();
     let smart_ids: Vec<_> = copies.walk().into_iter().filter_map(|(_, _, l)| matches!(l.content, LayerContent::Smart(_)).then_some(l.id)).collect();
     for id in smart_ids {

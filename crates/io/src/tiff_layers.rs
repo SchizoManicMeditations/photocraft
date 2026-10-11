@@ -105,6 +105,8 @@ pub(crate) fn import_layered(name: &str, img: &Image, layers: &[u8]) -> Result<I
     let data = planar_big_endian(&img, color_channels, mode == PsdMode::Cmyk)?;
     let image_data = ImageData { compression: Compression::Raw, data };
     let file = isd.into_psd(header, resources, image_data);
+    // The same nesting limit as opening a PSD (#2940).
+    crate::psd_import::check_group_depth(&file)?;
     let (mut doc, w) = psd_to_document(&file);
     warnings.extend(w);
     doc.name = name.to_string();

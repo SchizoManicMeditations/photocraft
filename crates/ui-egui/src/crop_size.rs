@@ -154,6 +154,36 @@ pub fn ratio(o: &ToolOptions, doc_dpi: f64) -> Option<f64> {
     Some(w / h).filter(|k| k.is_finite() && *k > 0.0)
 }
 
+/// Editable W and H shown for a custom aspect ratio. An existing valid ratio is authoritative;
+/// when either side is zero, use the in-progress values retained in ToolOptions.
+pub fn custom_ratio_fields(o: &ToolOptions, doc_size: (f64, f64)) -> (f32, f32) {
+    crate::chrome_ui::crop_ratio(&o.crop_ratio, doc_size.0, doc_size.1)
+        .filter(|(w, h)| w.is_finite() && h.is_finite() && *w > 0.0 && *h > 0.0 && *w <= 99_999.0 && *h <= 99_999.0)
+        .map(|(w, h)| (w as f32, h as f32))
+        .unwrap_or((o.crop_custom_ratio_width, o.crop_custom_ratio_height))
+}
+
+/// Apply the selected non-WHR ratio to its editable W/H fields. Free Ratio starts empty.
+pub fn select_custom_ratio(o: &mut ToolOptions) {
+    let sides = crate::chrome_ui::crop_ratio(&o.crop_ratio, 0.0, 0.0)
+        .filter(|(w, h)| w.is_finite() && h.is_finite() && *w > 0.0 && *h > 0.0 && *w <= 99_999.0 && *h <= 99_999.0)
+        .map(|(w, h)| (w as f32, h as f32))
+        .unwrap_or((0.0, 0.0));
+    (o.crop_custom_ratio_width, o.crop_custom_ratio_height) = sides;
+}
+
+/// Keep custom ratio fields across frames. An incomplete pair means free Ratio until both sides
+/// are positive.
+pub fn set_custom_ratio_fields(o: &mut ToolOptions, width: f32, height: f32) {
+    o.crop_custom_ratio_width = width;
+    o.crop_custom_ratio_height = height;
+    if width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0 {
+        o.crop_ratio = format!("{}:{}", crate::widgets::fmt_num(f64::from(width)), crate::widgets::fmt_num(f64::from(height)));
+    } else {
+        o.crop_ratio.clear();
+    }
+}
+
 /// `image.crop`'s target params for the pending crop: `targetWidth`/`targetHeight` (whole px) when
 /// W and H are set, and `resolution` (ppi) when the resolution is; the Image Interpolation
 /// preference resamples.
@@ -217,6 +247,7 @@ pub fn chosen(app: &mut PhotocraftApp) {
         o.crop_resolution = (*r).into();
         o.crop_resolution_unit = PX_PER_IN.into();
     }
+    crate::crop_ui::apply_ratio(app);
 }
 
 /// I with the Crop tool (no text field focused, which the caller checks): Front Image. Returns
@@ -227,6 +258,7 @@ pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     }
     if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, egui::Key::I)) {
         front_image(app);
+        crate::crop_ui::apply_ratio(app);
         return true;
     }
     false
@@ -304,6 +336,34 @@ mod tests {
             crop_resolution_unit: unit.into(),
             ..ToolOptions::default()
         }
+    }
+
+    #[test]
+    fn custom_ratio_keeps_the_first_side_until_the_second_is_entered() {
+        let mut options = ToolOptions::default();
+        select_custom_ratio(&mut options);
+        set_custom_ratio_fields(&mut options, 4.0, 0.0);
+
+        assert_eq!(options.crop_ratio, "", "an incomplete ratio stays unconstrained");
+        assert_eq!(custom_ratio_fields(&options, (0.0, 0.0)), (4.0, 0.0), "first entry survives the next frame");
+
+        let (width, _) = custom_ratio_fields(&options, (0.0, 0.0));
+        set_custom_ratio_fields(&mut options, width, 3.0);
+        assert_eq!(options.crop_ratio, "4:3");
+        assert_eq!(custom_ratio_fields(&options, (0.0, 0.0)), (4.0, 3.0));
+        let (width, height) = crate::chrome_ui::crop_ratio(&options.crop_ratio, 0.0, 0.0).unwrap_or_default();
+        assert_eq!(width / height, 4.0 / 3.0);
+    }
+
+    #[test]
+    fn selecting_free_ratio_clears_previous_custom_dimensions() {
+        let mut options = ToolOptions { crop_ratio: "16:9".into(), ..ToolOptions::default() };
+        select_custom_ratio(&mut options);
+        assert_eq!(custom_ratio_fields(&options, (0.0, 0.0)), (16.0, 9.0));
+
+        options.crop_ratio.clear();
+        select_custom_ratio(&mut options);
+        assert_eq!(custom_ratio_fields(&options, (0.0, 0.0)), (0.0, 0.0));
     }
 
     #[test]
@@ -411,6 +471,19 @@ mod tests {
 
     /// Committing a W x H x Resolution crop resamples the frame's area to exactly W x H px and sets
     /// the resolution, in one undo step, at 8 and 16 bits.
+    #[test]
+    fn choosing_a_size_with_the_canvas_ratio_commits_without_a_resize() {
+        let mut app = app(SampleType::U8);
+        crate::crop_ui::ensure_frame(&mut app);
+        app.ui.tool_options = whr("800 px", "600 px", "92", PX_PER_IN);
+        chosen(&mut app);
+        assert_eq!(app.ui.crop_rect, Some([0.0, 0.0, 400.0, 300.0]));
+        assert!(!app.crop.default_frame, "an output size is a pending crop even when the frame fits");
+        crate::canvas::commit_crop(&mut app);
+        let doc = &app.session.active().unwrap().doc;
+        assert_eq!((doc.size, doc.resolution_dpi), (Size::new(800, 600), 92.0));
+    }
+
     #[test]
     fn commit_resamples_to_the_target_size_and_resolution() {
         for depth in [SampleType::U8, SampleType::U16] {

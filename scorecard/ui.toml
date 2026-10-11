@@ -59,14 +59,14 @@ id = "UI-217-8"
 target = "Tool-specific canvas right-click menu; right-click spelling suggestions in text fields"
 status = "partial"
 issue = 217
-note = "paint_mouse.rs brush picker and canvas_tool_menu.rs selection actions; other tools and text spelling menus missing"
+note = "paint_mouse.rs brush picker and canvas_tool_menu.rs selection actions; text_field_menu.rs gives every text field its right-click Undo/Cut/Copy/Paste/Delete/Select All menu (#2921); other tools missing; spelling suggestions (edit.checkSpelling suggest) not in the text-field menu yet"
 
 [[item]]
 id = "UI-217-9"
 target = "UI scale presets 100/115/125/150/200 % through zoom_factor, remembered"
-status = "missing"
+status = "done"
 issue = 217
-note = "prefs.rs:61 UiScale unused; input_tests.rs:71 asserts zoom_factor stays 1.0"
+note = "prefs::UiScale offers Auto plus 75 to 300 percent (13 presets, more than the five this row lists); prefs_ui.rs display_scale resolves it (Auto follows the system scale, fractional and unscaled 4K included, #1072/#1278) and sync_display_scale applies it with ctx.set_zoom_factor. It is a preference, so it is remembered. The zoom_factor assert in input_tests.rs is about canvas zoom not scaling the interface, not about this setting"
 
 [[item]]
 id = "UI-217-10"
@@ -80,7 +80,7 @@ id = "UI-217-11"
 target = "Soft dark and soft light themes with picker previews; outlined knobs in light themes"
 status = "missing"
 issue = 217
-note = "theme.rs:28 five themes"
+note = "theme.rs ThemeKind has twelve themes (the four Pro brightness levels, Studio and Studio Light, Classic, Adwaita and Adwaita Dark, Solarized Dark, Breeze Light and Breeze Dark); no Soft dark or Soft light, and no outlined knobs in the light themes"
 
 [[item]]
 id = "UI-217-12"
@@ -141,9 +141,9 @@ note = "hints and tooltips go through shortcuts::pretty (6266b7a9, #262; pretty_
 [[item]]
 id = "UI-217-20"
 target = "'Show rulers in new documents' preference; guides stored as f64"
-status = "missing"
+status = "done"
 issue = 217
-note = "No rulers pref; doc lib.rs:523 guides are Vec<f32>"
+note = "View › Rulers is remembered in unitsAndRulers.showRulers and applied at launch and on change (#2918; rulers_open_as_last_set_after_a_restart); doc Guides are Vec<f64> through New Guide, .pcraft and PSD 1032 (guides_keep_sub_pixel_positions_through_pcraft_and_psd)"
 
 [[item]]
 id = "UI-217-21"
@@ -155,13 +155,13 @@ note = "edit_menu_cmds.rs:714 covers brushes, custom shapes, patterns with reord
 [[item]]
 id = "UI-217-22"
 target = "Stamp Visible into a new layer keeping originals; Alt+Merge keeps originals"
-status = "missing"
+status = "done"
 issue = 217
-note = "Only layer.mergeVisible (edit_cmds.rs:416)"
+note = "stamp_cmds.rs layer.stampVisible (Cmd+Alt+Shift+E) merges every visible layer into a new layer above the active one and keeps the originals; layer.stampDown (Cmd+Alt+E) too. As in Photoshop they have no menu item of their own: Alt + Layer > Merge Visible / Merge Down / Merge Layers run them (stamp_cmds::alt_variant, menus.rs); stamp_tests.rs alt_click_on_merge_items_stamps and cmd_alt_shift_e_stamps_visible_and_can_be_rebound"
 
 [[item]]
 id = "UI-217-23"
 target = "Layer clipboard: copy/paste whole layers (masks, styles, type) between documents"
-status = "missing"
+status = "partial"
 issue = 217
-note = "Only copy/paste layer style (extra_cmds.rs:592)"
+note = "layer.copyToDocument copies layers into another open document keeping names, content, masks, styles and blending, converting to the destination's profile and depth, as one history step (layer_copy_cmds.rs, #589). It is the command a drag between documents dispatches; there is still no copy/paste layer clipboard"

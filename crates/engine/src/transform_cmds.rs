@@ -429,35 +429,53 @@ fn quad_param(p: &Value) -> Option<[[f64; 2]; 4]> {
     Some(q)
 }
 
-fn transform(s: &mut Session, p: &Value) -> Result<Value> {
-    let st = s.active().ok_or(EngineError::NoDocument)?;
-    let id = match p.get("layer").and_then(Value::as_u64) {
-        Some(v) => Some(LayerId(v)),
-        None => st.active_layer,
-    };
-    let lone = lone_target(&st.doc, id, p)?;
-    let id = match (id, lone.is_some() && crate::channel_cmds::is_channel_target(p)) {
-        (_, true) => None,
-        (Some(id), false) => Some(id),
-        (None, false) => return Err(EngineError::Other("no active layer".into())),
-    };
-    let rect = match p.get("rect").and_then(Value::as_array) {
-        Some(r) if r.len() == 4 => {
-            let v: Vec<f64> = r.iter().map(|x| x.as_f64().unwrap_or(0.0)).collect();
-            [v[0], v[1], v[2], v[3]]
+/// `p`, with the Channels panel's targeted alpha channel or Quick Mask as its `"target"` when it
+/// names neither a target nor a layer (#2835).
+fn with_panel_target(s: &Session, p: &Value) -> Value {
+    let mut p = if p.is_object() { p.clone() } else { json!({}) };
+    if p.get("target").is_none()
+        && p.get("layer").is_none()
+        && let (Some(m), Some(Value::Object(t))) = (p.as_object_mut(), crate::channel_cmds::targeted_channel(s))
+    {
+        m.extend(t);
+    }
+    p
+}
+
+/// Does `l` hold the layer `id` somewhere inside it (not counting `l` itself)?
+fn holds(l: &Layer, id: LayerId) -> bool {
+    matches!(&l.content, LayerContent::Group(g) if g.children.iter().any(|c| c.id == id || holds(c, id)))
+}
+
+/// The layers a Free Transform of several selected layers moves together (#3592), bottom to top as
+/// `ids` lists them: ids no longer in the document, layers inside a selected group (the group moves
+/// them already), adjustment layers without a mask and layers with nothing to frame are left out.
+/// Hidden layers stay in, as in Photoshop. Fewer than two left means a single-layer transform.
+pub fn multi_targets(doc: &Document, ids: &[LayerId]) -> Vec<LayerId> {
+    let mut out: Vec<LayerId> = Vec::new();
+    for &id in ids {
+        let Some(l) = doc.layer(id) else { continue };
+        if out.contains(&id) || ids.iter().any(|&o| o != id && doc.layer(o).is_some_and(|g| holds(g, id))) {
+            continue;
         }
-        _ => {
-            let b = match (lone, id) {
-                (Some(surf), _) => target_bounds(&st.doc, surf),
-                (None, Some(id)) => transform_bounds(&st.doc, st.doc.layer(id).ok_or(EngineError::NoLayer(id))?),
-                (None, None) => Rect::EMPTY,
-            };
-            if b.is_empty() {
-                return Err(EngineError::Other("nothing to transform".into()));
-            }
-            [b.x0 as f64, b.y0 as f64, b.x1 as f64, b.y1 as f64]
+        if matches!(l.content, LayerContent::Adjustment(_)) && l.mask.is_none() {
+            continue;
         }
-    };
+        if transform_bounds(doc, l).is_empty() {
+            continue;
+        }
+        out.push(id);
+    }
+    out
+}
+
+/// The shared frame of [`multi_targets`]: the union of each layer's [`transform_bounds`].
+pub fn multi_bounds(doc: &Document, ids: &[LayerId]) -> Rect {
+    ids.iter().filter_map(|&id| doc.layer(id)).fold(Rect::EMPTY, |r, l| r.union(&transform_bounds(doc, l)))
+}
+
+/// The homography `p` asks for over `rect`: its `quad` (where the corners go) or affine `matrix`.
+fn homography(p: &Value, rect: [f64; 4]) -> Result<Homography> {
     let h = if let Some(q) = quad_param(p) {
         Homography::rect_to_quad(rect, q).ok_or_else(|| bad("degenerate quad"))?
     } else if let Some(m) = p.get("matrix").and_then(Value::as_array) {
@@ -473,6 +491,109 @@ fn transform(s: &mut Session, p: &Value) -> Result<Value> {
     if h.inverse().is_none() {
         return Err(bad("the transform collapses the layer"));
     }
+    Ok(h)
+}
+
+fn rect_param(p: &Value) -> Option<[f64; 4]> {
+    match p.get("rect").and_then(Value::as_array) {
+        Some(r) if r.len() == 4 => {
+            let v: Vec<f64> = r.iter().map(|x| x.as_f64().unwrap_or(0.0)).collect();
+            Some([v[0], v[1], v[2], v[3]])
+        }
+        _ => None,
+    }
+}
+
+/// Free Transform of several layers at once (#3592): one frame around all of them, the same
+/// projective map applied to each (so they keep their places relative to each other), one step.
+fn transform_many(s: &mut Session, p: &Value, ids: Vec<LayerId>) -> Result<Value> {
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    if let Some(&id) = ids.iter().find(|&&id| locked_for_transform(&st.doc, id)) {
+        let name = st.doc.layer(id).map_or_else(String::new, |l| l.name.clone());
+        return Err(EngineError::Other(format!("Could not transform: layer \"{name}\" is locked")));
+    }
+    let rect = match rect_param(p) {
+        Some(r) => r,
+        None => {
+            let b = multi_bounds(&st.doc, &ids);
+            if b.is_empty() {
+                return Err(EngineError::Other("nothing to transform".into()));
+            }
+            [b.x0 as f64, b.y0 as f64, b.x1 as f64, b.y1 as f64]
+        }
+    };
+    let h = homography(p, rect)?;
+    let affine = affine_part(&h);
+    let interp = Interp::parse(p.get("interpolation").and_then(Value::as_str).unwrap_or("bicubic"));
+    s.edit("Free Transform", |doc, _| {
+        let sel = doc.selection.clone();
+        for &id in &ids {
+            let is_group = doc.layer(id).is_some_and(Layer::is_group);
+            let group = group_locks(doc, id);
+            let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+            transform_layer(if is_group { None } else { sel.as_ref() }, group, l, &h, affine, interp)?;
+        }
+        let snapshot = doc.clone();
+        for &id in &ids {
+            if let Some(l) = doc.layer_mut(id) {
+                refresh_text(&snapshot, l);
+            }
+        }
+        if let Some(sel) = &doc.selection {
+            doc.selection = Some(warp_gray(sel, &h, Interp::Bilinear)?).filter(|s| !s.content_bounds().is_empty());
+        }
+        Ok(())
+    })?;
+    Ok(json!({"rect": rect, "layers": ids.iter().map(|l| l.0).collect::<Vec<_>>()}))
+}
+
+fn transform(s: &mut Session, p: &Value) -> Result<Value> {
+    if let Some(list) = p.get("layers").and_then(Value::as_array)
+        && p.get("target").is_none()
+    {
+        let st = s.active().ok_or(EngineError::NoDocument)?;
+        let ids: Vec<LayerId> = list.iter().filter_map(Value::as_u64).map(LayerId).collect();
+        let many = multi_targets(&st.doc, &ids);
+        if many.len() > 1 {
+            return transform_many(s, p, many);
+        }
+        if let Some(&one) = many.first() {
+            let mut p = p.clone();
+            p["layer"] = json!(one.0);
+            if let Some(m) = p.as_object_mut() {
+                m.remove("layers");
+            }
+            return transform(s, &p);
+        }
+        return Err(EngineError::Other("nothing to transform".into()));
+    }
+    let p = &with_panel_target(s, p);
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let id = match p.get("layer").and_then(Value::as_u64) {
+        Some(v) => Some(LayerId(v)),
+        None => st.active_layer,
+    };
+    let lone = lone_target(&st.doc, id, p)?;
+    let id = match (id, lone.is_some() && crate::channel_cmds::is_channel_target(p)) {
+        (_, true) => None,
+        (Some(id), false) => Some(id),
+        (None, false) => return Err(EngineError::Other("no active layer".into())),
+    };
+    let rect = match rect_param(p) {
+        Some(r) => r,
+        None => {
+            let b = match (lone, id) {
+                (Some(surf), _) => target_bounds(&st.doc, surf),
+                (None, Some(id)) => transform_bounds(&st.doc, st.doc.layer(id).ok_or(EngineError::NoLayer(id))?),
+                (None, None) => Rect::EMPTY,
+            };
+            if b.is_empty() {
+                return Err(EngineError::Other("nothing to transform".into()));
+            }
+            [b.x0 as f64, b.y0 as f64, b.x1 as f64, b.y1 as f64]
+        }
+    };
+    let h = homography(p, rect)?;
     let affine = affine_part(&h);
     let interp = Interp::parse(p.get("interpolation").and_then(Value::as_str).unwrap_or("bicubic"));
     let lone = lone.is_some();
@@ -507,7 +628,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Free Transform",
         menu: &[],
         shortcut: None,
-        params: r##"{"layer":id?,"rect":[x0,y0,x1,y1]? (source frame; default = layer content ∩ selection),"quad":[[x,y]×4]? (where the frame's corners go, clockwise from top-left),"matrix":[a,b,c,d,e,f]? (affine alternative),"interpolation":"bicubic|bilinear|nearest"="bicubic","target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target (an unlinked mask, an alpha channel or the Quick Mask transforms alone; a linked mask moves with its layer)}"##,
+        params: r##"{"layer":id?,"layers":[id]? (several layers transformed together around one shared frame, one step; #3592),"rect":[x0,y0,x1,y1]? (source frame; default = layer content ∩ selection),"quad":[[x,y]×4]? (where the frame's corners go, clockwise from top-left),"matrix":[a,b,c,d,e,f]? (affine alternative),"interpolation":"bicubic|bilinear|nearest"="bicubic","target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target (an unlinked mask, an alpha channel or the Quick Mask transforms alone; a linked mask moves with its layer)}"##,
         enabled: has_layer,
         journal: true,
         run: transform,
@@ -797,6 +918,36 @@ mod tests {
         assert_eq!(active_bounds(&s), Rect::new(10, 10, 30, 20), "layer untouched");
     }
 
+    /// The Channels panel targets an alpha channel: Edit › Transform › Flip Horizontal and a
+    /// 50% `edit.transform` (no `target` param) work on the channel, not the layer (BUG-207-4).
+    #[test]
+    fn transforms_follow_the_targeted_alpha_channel() {
+        let mut s = session();
+        s.execute("channel.new", json!({})).unwrap();
+        s.edit("paint channel", |doc, _| {
+            let ch = &mut doc.channels[0].surface;
+            ch.fill_rect(Rect::new(10, 10, 20, 20), &[1.0]);
+            ch.fill_rect(Rect::new(10, 10, 12, 20), &[0.5]);
+            Ok(())
+        })
+        .unwrap();
+        s.execute("channel.target", json!({"channel": 0})).unwrap();
+        let layer = |s: &Session| crate::active_layer_of(s).unwrap().surface().unwrap().read_region(Rect::new(0, 0, 100, 100));
+        let (pixels, past) = (layer(&s), s.active().unwrap().history.past_len());
+        s.execute("edit.transform.flipHorizontal", json!({})).unwrap();
+        // 8-bit channel: 0.5 is stored as 128/255.
+        let ch = |s: &Session, x, y| (s.active().unwrap().doc.channels[0].surface.sample_channel(x, y, 0) * 10.0).round() / 10.0;
+        assert_eq!((ch(&s, 19, 15), ch(&s, 10, 15)), (0.5, 1.0), "the channel flips within its frame");
+        assert!(layer(&s) == pixels, "the layer is untouched");
+        assert_eq!(s.active().unwrap().history.past_len(), past + 1, "one undo step");
+        s.execute("edit.transform", json!({"matrix": [0.5, 0, 0, 0.5, 0, 0], "interpolation": "nearest"})).unwrap();
+        assert_eq!((ch(&s, 7, 7), ch(&s, 15, 15)), (1.0, 0.0), "the channel scales to 50%");
+        assert!(layer(&s) == pixels, "the layer is untouched");
+        s.undo();
+        s.undo();
+        assert_eq!((ch(&s, 10, 15), ch(&s, 19, 15)), (0.5, 1.0));
+    }
+
     #[test]
     fn transform_targets_fail_gracefully() {
         let mut s = session();
@@ -848,5 +999,114 @@ mod tests {
         s.execute("select.rect", json!({"x": 10, "y": 10, "width": 5, "height": 10})).unwrap();
         let st = s.active().unwrap();
         assert_eq!(transform_bounds(&st.doc, st.doc.layer(st.active_layer.unwrap()).unwrap()), Rect::new(10, 10, 15, 20));
+    }
+
+    /// Two layers: the session's red rect at (10,10)-(30,20) and a blue one at (60,50)-(80,70),
+    /// both selected; returns (bottom, top).
+    fn two_layers() -> (Session, LayerId, LayerId) {
+        let mut s = session();
+        let a = s.active().unwrap().active_layer.unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.edit("paint", |doc, active| {
+            doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(60, 50, 80, 70), &[0.0, 0.0, 1.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+        let b = s.active().unwrap().active_layer.unwrap();
+        (s, a, b)
+    }
+
+    fn bounds_of(s: &Session, id: LayerId) -> Rect {
+        s.active().unwrap().doc.layer(id).unwrap().surface().unwrap().content_bounds()
+    }
+
+    #[test]
+    fn several_layers_scale_around_one_shared_frame_in_one_step() {
+        let (mut s, a, b) = two_layers();
+        assert_eq!(multi_bounds(&s.active().unwrap().doc, &[a, b]), Rect::new(10, 10, 80, 70));
+        let steps = s.active().unwrap().history.entries().len();
+        // Halve the shared frame about its top-left corner.
+        let r = s.execute("edit.transform", json!({"layers": [a.0, b.0], "quad": [[10, 10], [45, 10], [45, 40], [10, 40]]})).unwrap();
+        assert_eq!(r["rect"], json!([10.0, 10.0, 80.0, 70.0]));
+        assert_eq!(bounds_of(&s, a), Rect::new(10, 10, 20, 15));
+        assert_eq!(bounds_of(&s, b), Rect::new(35, 30, 45, 40));
+        assert_eq!(s.active().unwrap().history.entries().len(), steps + 1, "one history step");
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(bounds_of(&s, a), Rect::new(10, 10, 30, 20));
+        assert_eq!(bounds_of(&s, b), Rect::new(60, 50, 80, 70));
+    }
+
+    #[test]
+    fn several_layers_move_and_rotate_consistently() {
+        let (mut s, a, b) = two_layers();
+        s.execute("edit.transform", json!({"layers": [a.0, b.0], "matrix": [1, 0, 0, 1, 5, 7]})).unwrap();
+        assert_eq!(bounds_of(&s, a), Rect::new(15, 17, 35, 27));
+        assert_eq!(bounds_of(&s, b), Rect::new(65, 57, 85, 77));
+        s.execute("edit.undo", json!({})).unwrap();
+        // 180° about the shared centre (45, 40): each rect lands where the other's mirror is.
+        s.execute("edit.transform", json!({"layers": [a.0, b.0], "quad": [[80, 70], [10, 70], [10, 10], [80, 10]], "interpolation": "nearest"})).unwrap();
+        assert_eq!(bounds_of(&s, a), Rect::new(60, 60, 80, 70));
+        assert_eq!(bounds_of(&s, b), Rect::new(10, 10, 30, 30));
+    }
+
+    #[test]
+    fn several_layers_refuse_when_one_is_locked_and_skip_the_empty() {
+        let (mut s, a, b) = two_layers();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        let empty = s.active().unwrap().active_layer.unwrap();
+        assert_eq!(multi_targets(&s.active().unwrap().doc, &[a, b, empty]), vec![a, b]);
+        s.edit("lock", |doc, _| {
+            doc.layer_mut(b).unwrap().locks.position = true;
+            Ok(())
+        })
+        .unwrap();
+        let before = s.active().unwrap().history.entries().len();
+        assert!(s.execute("edit.transform", json!({"layers": [a.0, b.0], "matrix": [1, 0, 0, 1, 5, 0]})).is_err());
+        assert_eq!(bounds_of(&s, a), Rect::new(10, 10, 30, 20), "nothing moved");
+        assert_eq!(s.active().unwrap().history.entries().len(), before);
+        // One layer left: the single-layer path, with its own frame.
+        s.execute("edit.transform", json!({"layers": [a.0, empty.0], "matrix": [1, 0, 0, 1, 5, 0]})).unwrap();
+        assert_eq!(bounds_of(&s, a), Rect::new(15, 10, 35, 20));
+    }
+
+    #[test]
+    fn flip_and_rotate_turn_every_selected_layer_around_the_shared_box() {
+        let (mut s, a, b) = two_layers();
+        s.execute("layer.select", json!({"layer": a.0, "mode": "add"})).unwrap();
+        let steps = s.active().unwrap().history.entries().len();
+        s.execute("edit.transform.flipHorizontal", json!({})).unwrap();
+        assert_eq!(bounds_of(&s, a), Rect::new(60, 10, 80, 20));
+        assert_eq!(bounds_of(&s, b), Rect::new(10, 50, 30, 70));
+        assert_eq!(s.active().unwrap().history.entries().len(), steps + 1, "one step");
+        s.execute("edit.undo", json!({})).unwrap();
+        s.execute("edit.transform.rotate180", json!({})).unwrap();
+        assert_eq!(bounds_of(&s, a), Rect::new(60, 60, 80, 70));
+        assert_eq!(bounds_of(&s, b), Rect::new(10, 10, 30, 30));
+        s.execute("edit.undo", json!({})).unwrap();
+        // A named layer still turns alone, around its own box.
+        s.execute("edit.transform.flipVertical", json!({"layer": a.0})).unwrap();
+        assert_eq!((bounds_of(&s, a), bounds_of(&s, b)), (Rect::new(10, 10, 30, 20), Rect::new(60, 50, 80, 70)));
+    }
+
+    #[test]
+    fn warp_applies_one_shared_warp_to_every_listed_layer_in_one_step() {
+        let (mut s, a, b) = two_layers();
+        let before = (bounds_of(&s, a), bounds_of(&s, b));
+        let steps = s.active().unwrap().history.entries().len();
+        let r = s.execute("edit.transform.warp", json!({"layers": [a.0, b.0], "style": "arc", "bend": 50})).unwrap();
+        assert_eq!(r["rect"], json!([10, 10, 80, 70]), "the shared box");
+        assert_ne!(bounds_of(&s, a), before.0);
+        assert_ne!(bounds_of(&s, b), before.1);
+        assert_eq!(s.active().unwrap().history.entries().len(), steps + 1);
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!((bounds_of(&s, a), bounds_of(&s, b)), before);
+        // A locked layer refuses the whole warp.
+        s.edit("lock", |doc, _| {
+            doc.layer_mut(b).unwrap().locks.position = true;
+            Ok(())
+        })
+        .unwrap();
+        assert!(s.execute("edit.transform.warp", json!({"layers": [a.0, b.0], "style": "arc", "bend": 50})).is_err());
+        assert_eq!(bounds_of(&s, a), before.0);
     }
 }

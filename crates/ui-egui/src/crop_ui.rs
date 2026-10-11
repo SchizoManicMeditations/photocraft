@@ -200,13 +200,50 @@ fn size_ok(r: [f64; 4]) -> bool {
 }
 
 /// The options-bar ratio preset as width / height (W : H in W x H x Resolution mode).
-fn preset_ratio(app: &PhotocraftApp) -> Option<f64> {
+pub(crate) fn preset_ratio(app: &PhotocraftApp) -> Option<f64> {
     if app.ui.tool_options.crop_ratio == crate::crop_size::WHR {
         let dpi = app.session.active().map_or(72.0, |s| f64::from(s.doc.resolution_dpi));
         return crate::crop_size::ratio(&app.ui.tool_options, dpi);
     }
     let size = app.session.active().map_or((1.0, 1.0), |s| (s.doc.size.width as f64, s.doc.size.height as f64));
     crate::chrome_ui::crop_ratio(&app.ui.tool_options.crop_ratio, size.0, size.1).map(|(w, h)| w / h).filter(|k| k.is_finite() && *k > 0.0)
+}
+
+/// Largest centred rectangle of `ratio` contained in the current frame; never adds area.
+fn fitted_ratio(r: [f64; 4], ratio: f64) -> Option<[f64; 4]> {
+    let (w, h) = (r[2] - r[0], r[3] - r[1]);
+    if !r.iter().all(|v| v.is_finite()) || !w.is_finite() || !h.is_finite() || w <= 0.0 || h <= 0.0 || !ratio.is_finite() || ratio <= 0.0 {
+        return None;
+    }
+    if ((w / h) / ratio - 1.0).abs() < 1e-12 {
+        return Some(r);
+    }
+    let c = [r[0] + w / 2.0, r[1] + h / 2.0];
+    let (w, h) = if w / h > ratio { (h * ratio, h) } else { (w, w / ratio) };
+    let fitted = [c[0] - w / 2.0, c[1] - h / 2.0, c[0] + w / 2.0, c[1] + h / 2.0];
+    (fitted.iter().all(|v| v.is_finite()) && fitted[2] > fitted[0] && fitted[3] > fitted[1]).then_some(fitted)
+}
+
+/// Apply committed options to the preview now, before a resize or confirmation is needed.
+pub(crate) fn apply_ratio(app: &mut PhotocraftApp) {
+    if app.ui.tool != Tool::Crop || app.crop.drag.is_some() {
+        return;
+    }
+    frame(app);
+    fit_frame(app);
+    crate::crop_mode::sync_frame(app);
+}
+
+fn fit_frame(app: &mut PhotocraftApp) {
+    let dpi = app.session.active().map_or(72.0, |s| f64::from(s.doc.resolution_dpi));
+    if let Some(r) = app.ui.crop_rect
+        && let Some(ratio) = preset_ratio(app)
+        && let Some(fitted) = fitted_ratio(r, ratio)
+        // W x H x Resolution can change output size even when the frame already fits.
+        && (fitted != r || crate::crop_size::target(&app.ui.tool_options, dpi).is_some())
+    {
+        keyed(app, fitted);
+    }
 }
 
 /// A new frame drawn from `anchor` to `cur`: ⇧ square, ⌥ from the centre, `ratio` held.
@@ -308,6 +345,7 @@ fn frame(app: &mut PhotocraftApp) {
     app.crop.frame_for = key;
     app.crop.editing = false;
     claim(app);
+    fit_frame(app);
 }
 
 /// A crop gesture is in progress: Space repositions the frame rather than panning.
@@ -408,7 +446,7 @@ pub fn press(app: &mut PhotocraftApp) -> bool {
     new
 }
 
-fn tolerance(app: &PhotocraftApp) -> f64 {
+pub(crate) fn tolerance(app: &PhotocraftApp) -> f64 {
     HANDLE_PX / (app.point_zoom() as f64).max(0.01)
 }
 
@@ -522,9 +560,13 @@ pub fn swap_orientation(app: &mut PhotocraftApp) -> bool {
     {
         app.ui.tool_options.crop_ratio = k;
     }
-    keyed(app, swapped(r));
-    crate::crop_mode::sync_frame(app);
-    crate::crop_mode::auto_center(app);
+    if preset_ratio(app).is_some() {
+        apply_ratio(app);
+    } else {
+        keyed(app, swapped(r));
+        crate::crop_mode::sync_frame(app);
+        crate::crop_mode::auto_center(app);
+    }
     true
 }
 
@@ -668,8 +710,7 @@ fn update(app: &mut PhotocraftApp, p: [f64; 2], mods: Modifiers) {
             // Auto Center Preview: the box stays centred where it was while the handle follows
             // the pointer.
             let q = crate::crop_mode::to_press(app, Some(view), p);
-            let keep = (rect[2] - rect[0] > 0.0 && rect[3] - rect[1] > 0.0).then(|| (rect[2] - rect[0]) / (rect[3] - rect[1]));
-            let ratio = ratio.or(if mods.shift { keep } else { None });
+            let ratio = resize_ratio(app, rect, mods);
             crate::crop_mode::live_resize(app, crate::crop_mode::LiveResize { rect, deg, hx, hy, start, q, ratio, alt: mods.alt }, view);
             return;
         }
@@ -707,6 +748,12 @@ fn update(app: &mut PhotocraftApp, p: [f64; 2], mods: Modifiers) {
         CropDrag::Rotate { .. } | CropDrag::TurnImage { .. } | CropDrag::MoveImage { .. } => return,
     };
     app.ui.crop_rect = Some(rect);
+}
+
+/// Geometry and snapping must use the same ratio so constrained handles stay aligned.
+pub(crate) fn resize_ratio(app: &PhotocraftApp, rect: [f64; 4], mods: Modifiers) -> Option<f64> {
+    let keep = (rect[2] - rect[0] > 0.0 && rect[3] - rect[1] > 0.0).then(|| (rect[2] - rect[0]) / (rect[3] - rect[1]));
+    preset_ratio(app).or(if mods.shift { keep } else { None })
 }
 
 /// Cursor over the canvas at document point `p`: resize arrows on the edges, move inside.
@@ -748,7 +795,7 @@ pub fn turn_cursor_dir(app: &PhotocraftApp, p: [f64; 2]) -> Option<[f64; 2]> {
         Some(_) => false,
         None => hit_turned(r, deg, p, tolerance(app)) == Hit::Outside,
     };
-    if !turning || !(p[0].is_finite() && p[1].is_finite()) {
+    if !(turning && p[0].is_finite() && p[1].is_finite()) {
         return None;
     }
     let c = center(r);
@@ -758,9 +805,9 @@ pub fn turn_cursor_dir(app: &PhotocraftApp, p: [f64; 2]) -> Option<[f64; 2]> {
     Some(turn([sx * std::f64::consts::FRAC_1_SQRT_2, sy * std::f64::consts::FRAC_1_SQRT_2], [0.0, 0.0], deg))
 }
 
-/// Photoshop's crop turn cursor at screen point `p`: a short arc with an arrowhead at each end,
-/// curving round the frame corner that lies in screen direction `toward` (an original drawing, no
-/// proprietary cursor asset).
+/// Photoshop's turn cursor (Crop, and Free Transform's rotate zone) at screen point `p`: a short
+/// arc with an arrowhead at each end, curving round the frame corner that lies in screen direction
+/// `toward` (an original drawing, no proprietary cursor asset).
 pub fn draw_turn_cursor(ctx: &egui::Context, p: egui::Pos2, toward: egui::Vec2) {
     let len = toward.length();
     if !len.is_finite() || len < 1e-6 {
@@ -833,6 +880,57 @@ mod tests {
             tool_event(app, ToolEvent::Move { x: p[0], y: p[1], pressure: 1.0 }, mods);
         }
         tool_event(app, ToolEvent::Up { x: last[0], y: last[1] }, mods);
+    }
+
+    #[test]
+    fn fitting_a_ratio_keeps_the_centre_angle_and_area() {
+        let mut app = app(SampleType::U8);
+        app.ui.crop_rect = Some([20.0, 10.0, 180.0, 90.0]);
+        app.ui.crop_angle = 25.0;
+        for key in ["1:1", "16:9", "9:16", "", "0:0"] {
+            let before = app.ui.crop_rect.unwrap();
+            app.ui.tool_options.crop_ratio = key.into();
+            crate::crop_size::chosen(&mut app);
+            let after = app.ui.crop_rect.unwrap();
+            assert_eq!(center(after), center(before));
+            assert_eq!(app.ui.crop_angle, 25.0);
+            assert!(after[0] >= before[0] && after[1] >= before[1] && after[2] <= before[2] && after[3] <= before[3]);
+            if let Some(ratio) = preset_ratio(&app) {
+                assert!(((after[2] - after[0]) / (after[3] - after[1]) - ratio).abs() < 1e-10);
+            } else {
+                assert_eq!(after, before);
+            }
+        }
+        for ratio in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert!(fitted_ratio([0.0, 0.0, 200.0, 100.0], ratio).is_none());
+        }
+        assert!(fitted_ratio([-f64::MAX, 0.0, f64::MAX, 100.0], 1.0).is_none());
+    }
+
+    #[test]
+    fn choosing_a_ratio_fits_and_commits_without_a_resize() {
+        for classic in [false, true] {
+            let mut app = app(SampleType::U8);
+            app.ui.tool_options.crop_shield.classic_mode = classic;
+            ensure_frame(&mut app);
+            app.ui.tool_options.crop_ratio = "1:1".into();
+            crate::crop_size::chosen(&mut app);
+            assert_eq!(app.ui.crop_rect, Some([50.0, 0.0, 150.0, 100.0]));
+            crate::canvas::commit_crop(&mut app);
+            assert_eq!(app.session.active().unwrap().doc.size, Size::new(100, 100));
+        }
+    }
+
+    #[test]
+    fn entering_crop_with_a_saved_ratio_fits_the_selection_or_canvas() {
+        let mut app = app(SampleType::U8);
+        app.ui.tool_options.crop_ratio = "1:1".into();
+        ensure_frame(&mut app);
+        assert_eq!(app.ui.crop_rect, Some([50.0, 0.0, 150.0, 100.0]));
+        cancel(&mut app);
+        app.run("select.rect", json!({"x": 20, "y": 10, "width": 80, "height": 40})).unwrap();
+        ensure_frame(&mut app);
+        assert_eq!(app.ui.crop_rect, Some([40.0, 10.0, 80.0, 50.0]));
     }
 
     #[test]

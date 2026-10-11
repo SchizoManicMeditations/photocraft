@@ -357,15 +357,24 @@ pub fn style_paragraphs(t: &mut TextLayer, a: usize, b: usize, f: &dyn Fn(&mut P
         .collect();
     let style_at = |off: usize| old[starts.iter().rposition(|&s| s <= off).unwrap_or(0)].style.clone();
     let mut out: Vec<(usize, ParagraphStyle)> = Vec::new();
+    let trailing_break = t.text.ends_with(['\r', '\n']);
     for pr in photocraft_text::layout::split_paragraphs(&t.text) {
         let mut st = style_at(pr.start);
-        let touches = (pr.start < b && pr.end > a) || (a == b && a >= pr.start && (a < pr.end || pr.end == t.text.len()));
+        let terminal_empty = pr.start == pr.end;
+        let touches =
+            (pr.start < b && pr.end > a) || (a == b && a >= pr.start && (a < pr.end || terminal_empty || (pr.end == t.text.len() && !trailing_break)));
         if touches {
             f(&mut st);
         }
-        push_merge(&mut out, pr.len(), st.clone());
-        if out.is_empty() {
+        if terminal_empty && trailing_break {
+            // This paragraph has no bytes but must retain its own style for the
+            // next typed character and for the PSD's final paragraph marker.
             out.push((0, st));
+        } else {
+            push_merge(&mut out, pr.len(), st.clone());
+            if out.is_empty() {
+                out.push((0, st));
+            }
         }
     }
     t.paragraphs = out.into_iter().map(|(len, style)| ParagraphRun { len, style }).collect();
@@ -374,18 +383,23 @@ pub fn style_paragraphs(t: &mut TextLayer, a: usize, b: usize, f: &dyn Fn(&mut P
 /// Replaces bytes `a..b` with `new`, keeping styles: inserted text takes the style of the
 /// character before it (or after it at the start).
 pub fn replace_text(t: &mut TextLayer, a: usize, b: usize, new: &str) {
-    fn adjust<S: Clone + PartialEq>(runs: Vec<(usize, S)>, a: usize, b: usize, ins: usize) -> Vec<(usize, S)> {
+    fn adjust<S: Clone + PartialEq>(runs: Vec<(usize, S)>, a: usize, b: usize, ins: usize, trailing_paragraph: bool) -> Vec<(usize, S)> {
         let mut out: Vec<(usize, S)> = Vec::new();
         let mut at = 0;
-        let host = runs
-            .iter()
-            .scan(0, |acc, r| {
-                let s = *acc;
-                *acc += r.0;
-                Some((s, s + r.0))
-            })
-            .position(|(s, e)| if a == 0 { e > 0 || s == 0 } else { a > s && a <= e })
-            .unwrap_or(0);
+        let host = if trailing_paragraph && a == b && runs.last().is_some_and(|r| r.0 == 0) && a == runs.iter().map(|r| r.0).sum::<usize>() {
+            // Inserted text belongs to a styled final empty paragraph, not to
+            // the preceding paragraph whose break ends at this byte offset.
+            runs.len() - 1
+        } else {
+            runs.iter()
+                .scan(0, |acc, r| {
+                    let s = *acc;
+                    *acc += r.0;
+                    Some((s, s + r.0))
+                })
+                .position(|(s, e)| if a == 0 { e > 0 || s == 0 } else { a > s && a <= e })
+                .unwrap_or(0)
+        };
         for (i, (len, st)) in runs.into_iter().enumerate() {
             let (rs, re) = (at, at + len);
             at = re;
@@ -401,9 +415,15 @@ pub fn replace_text(t: &mut TextLayer, a: usize, b: usize, new: &str) {
     let pr: Vec<(usize, ParagraphStyle)> = t.paragraph_runs().into_iter().map(|r| (r.len, r.style)).collect();
     let first_c = cr.first().map(|r| r.1.clone()).unwrap_or_default();
     let first_p = pr.first().map(|r| r.1.clone()).unwrap_or_default();
-    let mut cr = adjust(cr, a, b, new.len());
-    let mut pr = adjust(pr, a, b, new.len());
+    let trailing_style = t.text.ends_with(['\r', '\n']).then(|| pr.last().filter(|r| r.0 == 0).map(|r| r.1.clone())).flatten();
+    let mut cr = adjust(cr, a, b, new.len(), false);
+    let mut pr = adjust(pr, a, b, new.len(), true);
     t.text.replace_range(a..b, &new);
+    if t.text.ends_with(['\r', '\n'])
+        && let Some(style) = trailing_style
+    {
+        pr.push((0, style));
+    }
     if cr.is_empty() {
         cr.push((t.text.len(), first_c));
     }
@@ -606,6 +626,52 @@ fn info(s: &Session, p: &Value) -> Result<Value> {
     }))
 }
 
+/// A type layer (not yet rendered or added) from `type.create`'s params: text, point `x`/`y` or
+/// paragraph `box`, `orientation`, character and paragraph keys, starting from the default type
+/// styles in the foreground colour. Shared with the Type Mask tools' `type.createSelection`.
+pub(crate) fn new_text_layer(s: &Session, p: &Value, cmd: &str) -> Result<TextLayer> {
+    let orientation = match p.get("orientation") {
+        None => Orientation::Horizontal,
+        Some(Value::String(value)) if value == "horizontal" => Orientation::Horizontal,
+        Some(Value::String(value)) if value == "vertical" => Orientation::Vertical,
+        _ => return Err(bad(cmd, "orientation must be horizontal or vertical")),
+    };
+    check_kerning(p).map_err(|m| bad(cmd, m))?;
+    check_size_tracking(p).map_err(|m| bad(cmd, m))?;
+    let text = norm_text(p.get("text").and_then(Value::as_str).unwrap_or(""));
+    // Type › Save Default Type Styles sets the starting styles; the colour is always
+    // the foreground colour, as in Photoshop.
+    let (mut style, mut para) = s
+        .type_defaults
+        .clone()
+        .unwrap_or_else(|| (CharStyle { font_family: photocraft_text::fonts::DEFAULT_FAMILY.into(), ..Default::default() }, ParagraphStyle::default()));
+    let fg = s.tools.foreground;
+    style.color = Color::rgba(fg[0], fg[1], fg[2], fg[3]);
+    apply_char_props(&mut style, p);
+    apply_para_props(&mut para, p);
+    let (shape, transform) = match p.get("box").and_then(Value::as_array) {
+        Some(b) if b.len() == 4 => {
+            let v: Vec<f32> = b.iter().map(|x| x.as_f64().unwrap_or(0.0) as f32).collect();
+            if v[2] <= 0.0 || v[3] <= 0.0 {
+                return Err(bad(cmd, "box width and height must be positive"));
+            }
+            (TextShape::Box { x: 0.0, y: 0.0, width: v[2], height: v[3] }, Affine::translate(f64::from(v[0]), f64::from(v[1])))
+        }
+        _ => (TextShape::Point, Affine::translate(f32p(p, "x").unwrap_or(0.0).into(), f32p(p, "y").unwrap_or(0.0).into())),
+    };
+    let mut t = TextLayer {
+        runs: vec![TextRun { len: text.len(), style }],
+        paragraphs: vec![ParagraphRun { len: text.len(), style: para }],
+        text,
+        shape,
+        transform,
+        orientation,
+        ..Default::default()
+    };
+    t.sync_summary();
+    Ok(t)
+}
+
 const CHAR_PARAMS: &str = r##""font":str,"fontStyle":str,"weight":100..900,"italic":bool,"size":0.1..=1296 pt,"color":"#rrggbb"|[r,g,b,a],"tracking":-1000..=10000 (1/1000 em),"leading":pt|"auto","baselineShift":pt,"horizontalScale":%,"verticalScale":%,"underline":bool,"strikethrough":bool,"fauxBold":bool,"fauxItalic":bool,"kerning":1/1000em (manual, after each character)|"metrics"|"optical"|"off","caps":"normal|small|all","ligatures":bool,"discretionaryLigatures":bool,"features":{"ss01":1},"variations":{"wght":650},"language":str"##;
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -619,42 +685,7 @@ pub fn specs() -> Vec<CommandSpec> {
             enabled: has_doc,
             journal: true,
             run: |s, p| {
-                let orientation = match p.get("orientation") {
-                    None => Orientation::Horizontal,
-                    Some(Value::String(value)) if value == "horizontal" => Orientation::Horizontal,
-                    Some(Value::String(value)) if value == "vertical" => Orientation::Vertical,
-                    _ => return Err(bad("type.create", "orientation must be horizontal or vertical")),
-                };
-                check_kerning(p).map_err(|m| bad("type.create", m))?;
-                check_size_tracking(p).map_err(|m| bad("type.create", m))?;
-                let text = norm_text(p.get("text").and_then(Value::as_str).unwrap_or(""));
-                // Type › Save Default Type Styles sets the starting styles; the colour is always
-                // the foreground colour, as in Photoshop.
-                let (mut style, mut para) = s.type_defaults.clone().unwrap_or_else(|| (CharStyle { font_family: photocraft_text::fonts::DEFAULT_FAMILY.into(), ..Default::default() }, ParagraphStyle::default()));
-                let fg = s.tools.foreground;
-                style.color = Color::rgba(fg[0], fg[1], fg[2], fg[3]);
-                apply_char_props(&mut style, p);
-                apply_para_props(&mut para, p);
-                let (shape, transform) = match p.get("box").and_then(Value::as_array) {
-                    Some(b) if b.len() == 4 => {
-                        let v: Vec<f32> = b.iter().map(|x| x.as_f64().unwrap_or(0.0) as f32).collect();
-                        if v[2] <= 0.0 || v[3] <= 0.0 {
-                            return Err(bad("type.create", "box width and height must be positive"));
-                        }
-                        (TextShape::Box { x: 0.0, y: 0.0, width: v[2], height: v[3] }, Affine::translate(f64::from(v[0]), f64::from(v[1])))
-                    }
-                    _ => (TextShape::Point, Affine::translate(f32p(p, "x").unwrap_or(0.0).into(), f32p(p, "y").unwrap_or(0.0).into())),
-                };
-                let mut t = TextLayer {
-                    runs: vec![TextRun { len: text.len(), style }],
-                    paragraphs: vec![ParagraphRun { len: text.len(), style: para }],
-                    text,
-                    shape,
-                    transform,
-                    orientation,
-                    ..Default::default()
-                };
-                t.sync_summary();
+                let mut t = new_text_layer(s, p, "type.create")?;
                 let name = p.get("name").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| layer_name(&t.text));
                 let id = s.edit("New Type Layer", |doc, active| {
                     refresh(doc, &mut t);
@@ -877,7 +908,50 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
             },
         },
+        size_key("type.increaseSize", "Increase Type Size", "Cmd+Shift+.", |s, p| step_size(s, p, true, 2.0)),
+        size_key("type.decreaseSize", "Decrease Type Size", "Cmd+Shift+,", |s, p| step_size(s, p, false, 2.0)),
+        size_key("type.increaseSizeMore", "Increase Type Size by 10", "Cmd+Alt+Shift+.", |s, p| step_size(s, p, true, 10.0)),
+        size_key("type.decreaseSizeMore", "Decrease Type Size by 10", "Cmd+Alt+Shift+,", |s, p| step_size(s, p, false, 10.0)),
     ]
+}
+
+fn has_type_layer(s: &Session) -> std::result::Result<(), String> {
+    let st = s.active().ok_or("no document open")?;
+    match st.active_layer.and_then(|id| st.doc.layer(id)) {
+        Some(l) if matches!(l.content, LayerContent::Text(_)) => Ok(()),
+        _ => Err("the active layer is not a type layer".into()),
+    }
+}
+
+/// Photoshop's ⇧⌘> / ⇧⌘< (⌥ for bigger steps). On a US keyboard > and < share the . and , keys.
+fn size_key(id: &'static str, label: &'static str, shortcut: &'static str, run: fn(&mut Session, &Value) -> Result<Value>) -> CommandSpec {
+    CommandSpec {
+        id,
+        label,
+        menu: &[],
+        shortcut: Some(shortcut),
+        params: r##"{"layer":id?,"range":[startChar,endChar]? (default all),"by":pt? (as the layer appears)}"##,
+        enabled: has_type_layer,
+        journal: true,
+        run,
+    }
+}
+
+/// Grows or shrinks every character in the range by `by` points as the layer appears, so mixed
+/// sizes keep their differences and a scaled layer steps in the points its size field shows.
+fn step_size(s: &mut Session, p: &Value, up: bool, default_by: f32) -> Result<Value> {
+    let id = layer_id(s, p)?;
+    let by = f32p(p, "by").filter(|v| v.is_finite()).unwrap_or(default_by).abs().min(TYPE_SIZE_MAX_PT as f32);
+    with_text_layer(s, p, "Change Type Size", |t, _, _| {
+        let m = t.transform.m;
+        let scale = (m[0] * m[3] - m[1] * m[2]).abs().sqrt() as f32;
+        let scale = if scale.is_finite() && scale > 1e-3 { scale } else { 1.0 };
+        let delta = if up { by } else { -by } / scale;
+        let (a, b) = range_param(&t.text, p);
+        style_range(t, a, b, &|st| st.size_pt = (st.size_pt + delta).clamp(TYPE_SIZE_MIN_PT as f32, TYPE_SIZE_MAX_PT as f32));
+        Ok(())
+    })?;
+    info(s, &json!({ "layer": id.0 }))
 }
 
 #[cfg(test)]
@@ -1017,6 +1091,42 @@ mod tests {
     }
 
     #[test]
+    fn size_keys_step_each_run_and_respect_layer_scale() {
+        let mut s = session();
+        let id = s.execute("type.create", json!({"x": 0, "y": 40, "text": "Hello world", "size": 12})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("type.setStyle", json!({"layer": id, "range": [6, 11], "size": 20})).unwrap();
+        s.execute("type.increaseSize", json!({})).unwrap();
+        let sizes = |s: &Session| text_layer(s, id).char_runs().iter().map(|r| r.style.size_pt).collect::<Vec<_>>();
+        assert_eq!(sizes(&s), vec![14.0, 22.0], "every run grows by 2 pt");
+        s.execute("type.decreaseSizeMore", json!({"range": [0, 5]})).unwrap();
+        assert_eq!(sizes(&s)[0], 4.0, "only the range, by 10 pt");
+        for _ in 0..2 {
+            s.execute("type.decreaseSize", json!({"range": [0, 5]})).unwrap();
+        }
+        assert_eq!(sizes(&s)[0], TYPE_SIZE_MIN_PT as f32, "never below the smallest size");
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(sizes(&s)[0], 2.0, "one undo step per press");
+
+        let scaled = s.execute("type.create", json!({"x": 0, "y": 80, "text": "Big", "size": 12})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("type.edit", json!({"layer": scaled, "transform": [2.0, 0.0, 0.0, 2.0, 0.0, 80.0]})).unwrap();
+        s.execute("type.increaseSize", json!({"layer": scaled})).unwrap();
+        assert_eq!(text_layer(&s, scaled).char_runs()[0].style.size_pt, 13.0, "a 200% layer shows 24 pt and steps to 26 pt");
+    }
+
+    #[test]
+    fn size_keys_need_a_type_layer() {
+        let mut s = session();
+        assert!(s.execute("type.increaseSize", json!({})).is_err());
+        let id = s.execute("type.create", json!({"x": 0, "y": 40, "text": "Hi", "size": 12})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("type.increaseSize", json!({"by": "big"})).unwrap();
+        s.execute("type.increaseSize", json!({"by": -3})).unwrap();
+        s.execute("type.decreaseSize", json!({"by": 1e30, "range": [9, 0]})).unwrap();
+        assert_eq!(text_layer(&s, id).char_runs()[0].style.size_pt, TYPE_SIZE_MIN_PT as f32, "bad steps fall back or clamp, never panic");
+        assert_eq!(crate::commands::find("type.increaseSize").and_then(|c| c.shortcut), Some("Cmd+Shift+."));
+        assert_eq!(crate::commands::find("type.decreaseSize").and_then(|c| c.shortcut), Some("Cmd+Shift+,"));
+    }
+
+    #[test]
     fn auto_name_skips_leading_blank_lines() {
         let mut s = session();
         let id = s.execute("type.create", json!({"x": 0, "y": 40, "text": "\n  \nHello\nworld"})).unwrap()["layer"].as_u64().unwrap();
@@ -1091,6 +1201,37 @@ mod tests {
         assert_eq!(info["lines"].as_array().unwrap().len(), 2);
         let t = text_layer(&s, id);
         assert_eq!(t.runs.iter().map(|r| r.len).sum::<usize>(), t.text.len());
+    }
+
+    #[test]
+    fn trailing_empty_paragraph_styles_without_changing_previous_lines() {
+        let mut s = session();
+        let id = s.execute("type.create", json!({"text":"a\nb\n","x":20,"y":20,"size":12,"font":"Inter","align":"left"})).unwrap()["layer"].as_u64().unwrap();
+        let before = s.execute("type.info", json!({"layer":id})).unwrap();
+        let previous_line = before["lines"][1].clone();
+
+        let styled = s.execute("type.setStyle", json!({"layer":id,"range":[4,4],"align":"right"})).unwrap();
+        assert_eq!(styled["paragraphs"].as_array().unwrap().len(), 2);
+        assert_eq!(styled["paragraphs"][0]["start"], 0);
+        assert_eq!(styled["paragraphs"][0]["end"], 4);
+        assert_eq!(styled["paragraphs"][0]["style"]["align"], "Left");
+        assert_eq!(styled["paragraphs"][1]["start"], 4);
+        assert_eq!(styled["paragraphs"][1]["end"], 4);
+        assert_eq!(styled["paragraphs"][1]["style"]["align"], "Right");
+        assert_eq!(styled["lines"][1], previous_line, "the preceding paragraph must not move");
+        let raw = text_layer(&s, id).psd_raw.clone().unwrap();
+        let round_trip = photocraft_text::psd::text_layer_from_tysh(&raw, 72.0).unwrap();
+        assert_eq!(round_trip.paragraph_runs().last().unwrap().style.align, TextAlign::Right);
+
+        // Typing directly into the previously empty final paragraph retains its style.
+        let edited = s.execute("type.edit", json!({"layer":id,"replace":{"start":4,"end":4,"text":"c"}})).unwrap();
+        assert_eq!(edited["text"], "a\nb\nc");
+        assert_eq!(edited["paragraphs"][0]["end"], 4);
+        assert_eq!(edited["paragraphs"][0]["style"]["align"], "Left");
+        assert_eq!(edited["paragraphs"][1]["start"], 4);
+        assert_eq!(edited["paragraphs"][1]["end"], 5);
+        assert_eq!(edited["paragraphs"][1]["style"]["align"], "Right");
+        assert_eq!(edited["lines"][1], previous_line, "typing in the final paragraph does not move b");
     }
 
     #[test]

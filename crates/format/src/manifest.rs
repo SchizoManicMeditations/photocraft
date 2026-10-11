@@ -164,6 +164,10 @@ pub struct SurfaceM {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VideoDataM {
     pub frames: Vec<SurfaceM>,
+    /// Optional for backward compatibility with native documents created before original
+    /// frame snapshots were stored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_frames: Option<Vec<SurfaceM>>,
     pub source: photocraft_doc::VideoSource,
     pub fps: f32,
     #[serde(default)]

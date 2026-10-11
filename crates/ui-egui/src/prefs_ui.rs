@@ -14,7 +14,7 @@ use photocraft_doc::DocId;
 use photocraft_engine::jobs::{JobEvent, JobId, JobOutcome, Started};
 #[cfg(test)]
 use photocraft_engine::prefs::Theme;
-use photocraft_engine::prefs::{self, AppearanceMode, DarkTheme, LightTheme, SECTIONS};
+use photocraft_engine::prefs::{self, AppearanceMode, DarkTheme, LightTheme, SECTIONS, Theme as SavedTheme};
 use photocraft_engine::snap::{SnapLine, SnapTargets};
 use serde_json::{Map, Value, json};
 
@@ -48,6 +48,10 @@ pub struct Runtime {
     pub(crate) checker_key: Option<[[u8; 3]; 2]>,
     /// Style last sent to the GPU canvas.
     pub(crate) gpu_style: Option<crate::gpu_canvas::CanvasStyle>,
+    /// `unitsAndRulers.showRulers` as last applied to View › Rulers.
+    show_rulers: Option<bool>,
+    /// Tool options as last remembered in the preferences (see `tool_memory`).
+    pub(crate) tool_options: Option<crate::state::ToolOptions>,
 }
 
 /// The GPU canvas colours from Preferences › Transparency & Gamut.
@@ -88,6 +92,8 @@ fn selected_theme(interface: &prefs::Interface, system: Option<egui::Theme>) -> 
     if light {
         match interface.light_theme {
             LightTheme::StudioLight => ThemeKind::StudioLight,
+            LightTheme::ProLightGray => ThemeKind::ProLightGray,
+            LightTheme::ProLight => ThemeKind::ProLight,
             LightTheme::Classic => ThemeKind::Classic,
             LightTheme::Adwaita => ThemeKind::Adwaita,
             LightTheme::BreezeLight => ThemeKind::BreezeLight,
@@ -120,8 +126,78 @@ pub(crate) fn cycle_appearance(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
+const LIGHT_THEME_OPTIONS: &[(&str, ThemeKind)] = &[
+    ("studioLight", ThemeKind::StudioLight),
+    ("proLightGray", ThemeKind::ProLightGray),
+    ("proLight", ThemeKind::ProLight),
+    ("classic", ThemeKind::Classic),
+    ("adwaita", ThemeKind::Adwaita),
+    ("breezeLight", ThemeKind::BreezeLight),
+];
+const DARK_THEME_OPTIONS: &[(&str, ThemeKind)] = &[
+    ("proMedium", ThemeKind::ProMedium),
+    ("pro", ThemeKind::Pro),
+    ("studio", ThemeKind::Studio),
+    ("solarizedDark", ThemeKind::SolarizedDark),
+    ("adwaitaDark", ThemeKind::AdwaitaDark),
+    ("breezeDark", ThemeKind::BreezeDark),
+];
+
+fn favorite_theme_groups(favorites: &[SavedTheme]) -> (Vec<ThemeKind>, Vec<ThemeKind>) {
+    let group = |options: &[(&str, ThemeKind)]| {
+        options.iter().filter_map(|(id, kind)| SavedTheme::parse(id).filter(|theme| favorites.contains(theme)).map(|_| *kind)).collect()
+    };
+    (group(LIGHT_THEME_OPTIONS), group(DARK_THEME_OPTIONS))
+}
+
+/// Right-click menu on the top-right appearance button. A plain click still cycles modes.
+pub(crate) fn appearance_context_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    if ui.button(tl!("Appearance Settings…")).clicked() {
+        open_preferences(app, "interface");
+        ui.close();
+    }
+    let (light, dark) = favorite_theme_groups(&app.session.prefs().interface.favorite_themes);
+    let has_light = !light.is_empty();
+    if !light.is_empty() || !dark.is_empty() {
+        ui.separator();
+    }
+    for kind in light {
+        if ui.selectable_label(app.ui.theme == kind, tl!(kind.label())).clicked() {
+            app.set_theme(ui.ctx(), kind);
+            ui.close();
+        }
+    }
+    if has_light && !dark.is_empty() {
+        ui.separator();
+    }
+    for kind in dark {
+        if ui.selectable_label(app.ui.theme == kind, tl!(kind.label())).clicked() {
+            app.set_theme(ui.ctx(), kind);
+            ui.close();
+        }
+    }
+}
+
 fn system_theme(app: &PhotocraftApp, ctx: &egui::Context) -> Option<egui::Theme> {
     app.services.system_theme.as_ref().and_then(|read| read(ctx)).or_else(|| ctx.system_theme())
+}
+
+/// View › Rulers follows `unitsAndRulers.showRulers` when the preference changes (at launch, from
+/// `prefs.set` or a reset), so documents open with the rulers as last set.
+fn sync_rulers(app: &mut PhotocraftApp) {
+    let want = app.session.prefs().units_and_rulers.show_rulers;
+    if app.prefs_rt.show_rulers != Some(want) {
+        app.ui.extras.rulers = want;
+        app.prefs_rt.show_rulers = Some(want);
+    }
+}
+
+/// View › Rulers was toggled: remember it for the next launch (Photoshop keeps the last state).
+pub(crate) fn remember_rulers(app: &mut PhotocraftApp, on: bool) {
+    if app.session.prefs().units_and_rulers.show_rulers != on {
+        app.session.prefs.edit(|p| p.units_and_rulers.show_rulers = on);
+    }
+    app.prefs_rt.show_rulers = Some(on);
 }
 
 // ------------------------------------------------------------------ lifecycle
@@ -139,6 +215,8 @@ pub fn load(app: &mut PhotocraftApp) {
     }
     crate::dock::restore(app);
     crate::brush_picker::restore(app);
+    sync_rulers(app);
+    crate::tool_memory::restore(app);
     app.sync_recent();
     app.prefs_rt.saved_rev = app.session.prefs.rev();
     app.prefs_rt.saved_value = Some(app.session.prefs_value());
@@ -263,30 +341,20 @@ fn presets_store(app: &mut PhotocraftApp) {
 
 /// Resolve an absolute pixels-per-point preference without multiplying the OS DPI twice.
 /// Monitor dimensions are physical pixels, independent of window size and UI zoom.
-fn display_scale(pref: prefs::UiScale, native: Option<f32>, monitor_px: Option<egui::Vec2>) -> f32 {
+fn display_scale(pref: prefs::UiScale, native: Option<f32>) -> f32 {
     let native = native.filter(|v| v.is_finite() && *v > 0.0).unwrap_or(1.0);
     match pref {
-        prefs::UiScale::Auto => {
-            // Follow the system's scale, fractional ones included (125%, 150%, 175%: #1072).
-            // Only when the system reports no scaling at all (100%) does a 4K display fall back
-            // to 200%, since unscaled 4K controls are unreadably small (#225). Overriding a scale
-            // the user picked in their desktop settings left only "too small" or "too big".
-            let unscaled = (native - 1.0).abs() < 0.01;
-            let is_4k = monitor_px.is_some_and(|s| s.x.is_finite() && s.y.is_finite() && s.x.min(s.y) >= 2160.0 && s.x.max(s.y) >= 3840.0);
-            if unscaled && is_4k { 2.0 } else { native }
-        }
+        // The system's scale, fractional ones included (125%, 150%, 175%: #1072), and 100% on a
+        // large 4K display run unscaled (#1278); 200% there is a fixed choice.
+        prefs::UiScale::Auto => native,
         fixed => fixed.name().parse::<f32>().map_or(1.0, |pct| pct / 100.0),
     }
 }
 
 fn sync_display_scale(app: &PhotocraftApp, ctx: &egui::Context) {
     let native = ctx.native_pixels_per_point();
-    // ViewportInfo uses egui points, including the current UI zoom. Converting back to
-    // physical pixels avoids oscillating between 100% and 200% on successive frames.
-    // logic() can receive new viewport DPI before InputState::pixels_per_point updates.
     let native_scale = native.filter(|v| v.is_finite() && *v > 0.0).unwrap_or(1.0);
-    let monitor_px = ctx.input(|i| i.viewport().monitor_size).map(|s| s * (native_scale * ctx.zoom_factor()));
-    let scale = display_scale(app.session.prefs().interface.ui_scale, native, monitor_px);
+    let scale = display_scale(app.session.prefs().interface.ui_scale, native);
     ctx.set_zoom_factor(scale / native_scale);
 }
 
@@ -318,6 +386,7 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
         load(app);
     }
     recovery(app);
+    sync_rulers(app);
     sync_display_scale(app, ctx);
     sync_appearance(app, ctx);
     crate::theme::set_ui_font_size(ctx, app.session.prefs().interface.ui_font_size);
@@ -335,6 +404,8 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
         app.prefs_rt.gpu_style = Some(style);
     }
     autosave(app);
+    #[cfg(not(target_arch = "wasm32"))]
+    link_updates(app, ctx);
     history_log(app);
 }
 
@@ -465,6 +536,39 @@ pub(crate) fn save_preferences(app: &mut PhotocraftApp) -> Result<(), String> {
         app.ui.notices.retain(|n| n.id != id);
     }
     Ok(())
+}
+
+/// Linked smart objects follow their files while the document is open, as in Photoshop: every two
+/// seconds, and as soon as the window comes back to the front (after saving in another app), stamp
+/// the active document's linked files on a worker thread and re-render the layers of the ones that
+/// changed ([`photocraft_engine::link_watch`]).
+#[cfg(not(target_arch = "wasm32"))]
+fn link_updates(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    match app.session.poll_link_scan() {
+        Some(Ok(r)) => {
+            if let Some(n) = r["updated"].as_array().map(Vec::len).filter(|n| *n > 0) {
+                app.ui.status = format!("Updated {n} linked smart object(s) changed on disk");
+            }
+        }
+        Some(Err(e)) => app.ui.status = e.to_string(),
+        None => {}
+    }
+    let (last_key, focus_key) = (egui::Id::new("linkWatch.lastScan"), egui::Id::new("linkWatch.focused"));
+    let now = ctx.input(|i| i.time);
+    let focused = ctx.input(|i| i.focused);
+    let was_focused: bool = ctx.data(|d| d.get_temp(focus_key)).unwrap_or(focused);
+    ctx.data_mut(|d| d.insert_temp(focus_key, focused));
+    let has_links = app.session.active().is_some_and(|d| !photocraft_engine::link_watch::linked_files(&d.doc).is_empty());
+    if !has_links {
+        return;
+    }
+    let last: f64 = ctx.data(|d| d.get_temp(last_key)).unwrap_or(f64::NEG_INFINITY);
+    if now - last >= 2.0 || (focused && !was_focused) {
+        ctx.data_mut(|d| d.insert_temp(last_key, now));
+        app.session.start_link_scan();
+    }
+    let wait = if app.session.link_scan.is_some() { 100 } else { 2000 };
+    ctx.request_repaint_after(std::time::Duration::from_millis(wait));
 }
 
 /// Background autosave of documents with unsaved changes every N minutes (File Handling).
@@ -1201,7 +1305,7 @@ fn theme_preview(ui: &mut egui::Ui, kind: ThemeKind, width: f32) {
     painter.rect_stroke(art, 0.0, egui::Stroke::new(1.0, p.card_border), egui::StrokeKind::Inside);
 }
 
-fn theme_card(ui: &mut egui::Ui, title: &str, active: bool, selected: &mut String, options: &[(&str, ThemeKind)], width: f32) {
+fn theme_card(ui: &mut egui::Ui, title: &str, active: bool, selected: &mut String, favorites: &mut Vec<SavedTheme>, options: &[(&str, ThemeKind)], width: f32) {
     let Some((_, first_kind)) = options.first() else { return };
     let t = Tokens::get(ui.ctx());
     egui::Frame::new()
@@ -1225,7 +1329,37 @@ fn theme_card(ui: &mut egui::Ui, title: &str, active: bool, selected: &mut Strin
             ui.add_space(6.0);
             for (id, _) in options {
                 let label = choice_label(id);
-                ui.radio_value(selected, (*id).to_string(), tl!(&label));
+                let row = egui::Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), 24.0));
+                let hovered = ui.ctx().pointer_hover_pos().is_some_and(|p| row.contains(p));
+                ui.horizontal(|ui| {
+                    ui.radio_value(selected, (*id).to_string(), tl!(&label));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if let Some(theme) = SavedTheme::parse(id) {
+                            let favorite = favorites.contains(&theme);
+                            let (icon, tint) = if favorite { ("star-filled", t.accent) } else { ("star", t.text_dim) };
+                            let star = egui::Button::image(crate::icons::image(icon, 15.0, tint)).frame(false);
+                            let response = ui.add_visible(favorite || hovered, star).on_hover_text(if favorite {
+                                tl!("Remove from favorites")
+                            } else {
+                                tl!("Add to favorites")
+                            });
+                            response.widget_info(|| {
+                                egui::WidgetInfo::labeled(
+                                    egui::WidgetType::Button,
+                                    true,
+                                    format!("{}: {}", if favorite { tl!("Remove from favorites") } else { tl!("Add to favorites") }, tl!(&label)),
+                                )
+                            });
+                            if response.clicked() {
+                                if favorite {
+                                    favorites.retain(|saved| *saved != theme);
+                                } else {
+                                    favorites.push(theme);
+                                }
+                            }
+                        }
+                    });
+                });
             }
         });
 }
@@ -1246,44 +1380,20 @@ fn appearance_rows(ui: &mut egui::Ui, obj: &mut Map<String, Value>, system: Opti
     let width = ((ui.available_width() - 10.0) / 2.0).max(190.0);
     let mut light = obj.get("lightTheme").and_then(Value::as_str).unwrap_or("studioLight").to_string();
     let mut dark = obj.get("darkTheme").and_then(Value::as_str).unwrap_or("proMedium").to_string();
+    let mut favorites: Vec<SavedTheme> = obj.get("favoriteThemes").cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
     ui.horizontal_top(|ui| {
         ui.set_min_width(width * 2.0 + 10.0);
         ui.allocate_ui_with_layout(vec2(width, 300.0), egui::Layout::top_down(egui::Align::Min), |ui| {
-            theme_card(
-                ui,
-                "Light Theme",
-                light_active,
-                &mut light,
-                &[
-                    ("studioLight", ThemeKind::StudioLight),
-                    ("classic", ThemeKind::Classic),
-                    ("adwaita", ThemeKind::Adwaita),
-                    ("breezeLight", ThemeKind::BreezeLight),
-                ],
-                width,
-            );
+            theme_card(ui, "Light Theme", light_active, &mut light, &mut favorites, LIGHT_THEME_OPTIONS, width);
         });
         ui.add_space(10.0);
         ui.allocate_ui_with_layout(vec2(width, 300.0), egui::Layout::top_down(egui::Align::Min), |ui| {
-            theme_card(
-                ui,
-                "Dark Theme",
-                !light_active,
-                &mut dark,
-                &[
-                    ("proMedium", ThemeKind::ProMedium),
-                    ("pro", ThemeKind::Pro),
-                    ("studio", ThemeKind::Studio),
-                    ("solarizedDark", ThemeKind::SolarizedDark),
-                    ("adwaitaDark", ThemeKind::AdwaitaDark),
-                    ("breezeDark", ThemeKind::BreezeDark),
-                ],
-                width,
-            );
+            theme_card(ui, "Dark Theme", !light_active, &mut dark, &mut favorites, DARK_THEME_OPTIONS, width);
         });
     });
     obj.insert("lightTheme".into(), json!(light));
     obj.insert("darkTheme".into(), json!(dark));
+    obj.insert("favoriteThemes".into(), json!(favorites));
     ui.add_space(12.0);
 }
 
@@ -1326,7 +1436,9 @@ fn section_fields(
             }
             // Settings nothing reads yet stay out of the dialog (issue #204); their stored values
             // pass through untouched.
-            if (section == "interface" && matches!(k.as_str(), "theme" | "appearanceMode" | "darkTheme" | "lightTheme"))
+            if (section == "interface" && matches!(k.as_str(), "theme" | "appearanceMode" | "darkTheme" | "lightTheme" | "favoriteThemes"))
+                // View › Rulers (⌘R) sets it, as in Photoshop.
+                || path == "unitsAndRulers.showRulers"
                 || prefs::is_hidden(&path)
                 || (section == "performance" && matches!(k.as_str(), "useGpu" | "gpuBackend" | "renderingMode"))
                 || (section == "export" && !export_field_visible(obj, &k))
@@ -2161,6 +2273,29 @@ mod tests {
         assert_eq!(reloaded.lock().unwrap().as_ref(), Some(&saved));
     }
 
+    #[test]
+    fn theme_star_saves_favorite_and_menu_groups_it() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let (mut app, _) = app_with_store();
+        open_preferences(&mut app, "interface");
+        let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            app
+        });
+        h.run_steps(4);
+        h.get_by_label("Classic").hover();
+        h.run_steps(2);
+        h.get_by_label("Add to favorites: Classic").click();
+        h.run_steps(2);
+        h.get_by_label("Apply").click();
+        h.run_steps(2);
+        assert_eq!(h.state().session.prefs().interface.favorite_themes, vec![SavedTheme::Classic]);
+        assert!(h.query_by_label("Remove from favorites: Classic").is_some());
+        let (light, dark) = favorite_theme_groups(&[SavedTheme::Studio, SavedTheme::Classic, SavedTheme::Adwaita]);
+        assert_eq!(light, vec![ThemeKind::Classic, ThemeKind::Adwaita]);
+        assert_eq!(dark, vec![ThemeKind::Studio]);
+    }
+
     /// Every generated preference label, section title and choice label has an entry in each
     /// language that claims complete menus (Japanese, Traditional Chinese, ...).
     #[test]
@@ -2175,6 +2310,9 @@ mod tests {
                 }
                 let Some(obj) = v.get(sec).and_then(Value::as_object) else { continue };
                 for k in obj.keys() {
+                    if sec == "interface" && k == "favoriteThemes" {
+                        continue; // Rendered as star controls beside the theme choices.
+                    }
                     let mut labels = vec![humanize(k)];
                     labels.extend(prefs::choices(&format!("{sec}.{k}")).into_iter().flatten().map(|c| choice_label(c)));
                     missing.extend(labels.into_iter().filter(|l| !crate::i18n::has(lang, l)));
@@ -2315,28 +2453,16 @@ mod tests {
     }
 
     #[test]
-    fn auto_scale_detects_4k_and_preserves_system_scale() {
+    fn auto_scale_preserves_system_scale() {
         use prefs::UiScale::Auto;
-        for size in [vec2(3840.0, 2160.0), vec2(4096.0, 2160.0), vec2(2160.0, 3840.0)] {
-            assert_eq!(display_scale(Auto, Some(1.0), Some(size)), 2.0);
-            // A fractional system scale is the user's choice and is kept as is (#1072).
-            for dpi in [1.25, 1.5, 1.75, 2.0, 2.5] {
-                assert_eq!(display_scale(Auto, Some(dpi), Some(size)), dpi);
-            }
+        // Whatever the monitor, 4K included: an unscaled desktop stays at 100% (#1278), and a
+        // fractional or below-100% system scale is the user's choice (#1072).
+        for dpi in [0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0] {
+            assert_eq!(display_scale(Auto, Some(dpi)), dpi);
         }
-        // Below 100% is a system choice too, even on 4K.
-        assert_eq!(display_scale(Auto, Some(0.75), Some(vec2(3840.0, 2160.0))), 0.75);
-        for size in [vec2(1920.0, 1080.0), vec2(2560.0, 1440.0)] {
-            for dpi in [1.25, 1.5, 1.75] {
-                assert_eq!(display_scale(Auto, Some(dpi), Some(size)), dpi);
-            }
-        }
-        assert_eq!(display_scale(Auto, Some(3.0), Some(vec2(3840.0, 2160.0))), 3.0);
-        for size in [vec2(1920.0, 1080.0), vec2(2560.0, 1440.0), vec2(3840.0, 1080.0)] {
-            assert_eq!(display_scale(Auto, Some(1.0), Some(size)), 1.0);
-        }
-        assert_eq!(display_scale(Auto, None, None), 1.0);
-        assert_eq!(display_scale(Auto, Some(f32::NAN), Some(vec2(f32::INFINITY, 2160.0))), 1.0);
+        assert_eq!(display_scale(Auto, None), 1.0);
+        assert_eq!(display_scale(Auto, Some(f32::NAN)), 1.0);
+        assert_eq!(display_scale(Auto, Some(-2.0)), 1.0);
     }
 
     #[test]
@@ -2359,13 +2485,13 @@ mod tests {
                 assert!((ctx.pixels_per_point() - expected).abs() < 1e-4);
             };
             for _ in 0..4 {
-                step(vec2(3840.0, 2160.0), 1.0, 2.0);
+                step(vec2(3840.0, 2160.0), 1.0, 1.0);
             }
             step(vec2(1920.0, 1080.0), 1.0, 1.0);
             step(vec2(3840.0, 2160.0), 1.5, 1.5);
             step(vec2(3840.0, 2160.0), 1.25, 1.25);
             step(vec2(2560.0, 1440.0), 1.75, 1.75);
-            step(vec2(3840.0, 2160.0), 1.0, 2.0);
+            step(vec2(3840.0, 2160.0), 1.0, 1.0);
         }
         for (pref, expected) in [("200", 2.0), ("125", 1.25), ("150", 1.5), ("100", 1.0), ("95", 0.95), ("90", 0.9), ("85", 0.85), ("80", 0.8), ("auto", 1.5)] {
             app.run("prefs.set", json!({"values": {"interface.uiScale": pref}})).unwrap();
@@ -2462,6 +2588,33 @@ mod tests {
     }
 
     #[test]
+    fn tool_options_survive_a_restart() {
+        let (mut app, store) = app_with_store();
+        let ctx = egui::Context::default();
+        tick(&mut app, &ctx);
+        app.ui.tool_options.move_auto_select = false;
+        app.ui.tool_options.feather = 12.0;
+        crate::tool_memory::persist(&mut app, &ctx);
+        tick(&mut app, &ctx);
+        // Only what differs from the defaults is stored.
+        assert_eq!(stored(&store)["toolOptions"], json!({"move_auto_select": false, "feather": 12.0}));
+        let saved = store.lock().unwrap().clone().unwrap();
+        let (mut app2, _) = app_with_saved(Some(saved));
+        tick(&mut app2, &ctx);
+        assert!(!app2.ui.tool_options.move_auto_select);
+        assert_eq!(app2.ui.tool_options.feather, 12.0);
+        assert_eq!(app2.ui.tool_options.tolerance, crate::state::ToolOptions::default().tolerance);
+        // A hand-edited file: unreadable fields keep their defaults, the good ones still load.
+        for bad in [json!("junk"), json!({"move_auto_select": "no", "feather": 1e300, "tolerance": 5.0, "unknown": 1})] {
+            let (mut app3, _) = app_with_saved(Some(json!({"toolOptions": bad}).to_string()));
+            tick(&mut app3, &ctx);
+            let o = &app3.ui.tool_options;
+            assert!(o.move_auto_select && o.feather == 0.0, "{bad}");
+            assert_eq!(o.tolerance, if bad.is_object() { 5.0 } else { 32.0 });
+        }
+    }
+
+    #[test]
     fn show_tooltips_preferences_turn_tooltips_off() {
         let (mut app, _) = app_with_store();
         let ctx = egui::Context::default();
@@ -2491,10 +2644,12 @@ mod tests {
         assert!(!prefs::is_hidden("type.fillNewTypeLayersWithPlaceholder"));
         assert!(!prefs::is_hidden("type.useEscToCommit"));
         assert!(!prefs::is_hidden("type.smartQuotes"));
-        // Rotate View with Trackpad is live; the other Enhanced Controls rows stay hidden.
+        assert!(!prefs::is_hidden("type.showFontNamesInEnglish"));
+        // Rotate View with Trackpad and the pinch zoom are live; the other Enhanced Controls rows
+        // stay hidden.
         assert!(has_visible_fields(&values, "enhancedControls"));
         assert!(!prefs::is_hidden("enhancedControls.rotateViewWithTrackpad"));
-        assert!(prefs::is_hidden("enhancedControls.zoomWithTrackpadPinch"));
+        assert!(!prefs::is_hidden("enhancedControls.zoomWithTrackpadPinch"));
         // Camera Raw Defaults shows only "Open in Camera Raw" so far.
         assert!(has_visible_fields(&values, "rawDefaults"));
         assert!(!prefs::is_hidden("rawDefaults.openInCameraRaw"));

@@ -15,6 +15,23 @@
 # Product and technology names (PhotoCraft, ArtCraft, OpenType, CMYK, Lab ...) stay in Latin
 # letters; the trailing "…" of dialog commands is kept.
 
+# Guide layout dialog
+	Rows	行
+	Number	数
+	Top:	上:
+	Left:	左:
+	Bottom:	下:
+	Right:	右:
+	Target:	対象:
+	Selected Artboards	選択したアートボード
+	Center Columns	列を中央に配置
+	Clear Existing Guides	既存のガイドを削除
+	Invalid guide layout	ガイドレイアウトが無効です
+	Leave empty for automatic size	自動サイズにするには空欄にします
+	5 Columns, 3 Rows	5列、3行
+	8 Columns	8列
+	12 Columns	12列
+
 	File	ファイル
 	Edit	編集
 	Image	画像
@@ -682,10 +699,15 @@
 	New Workspace…	新規ワークスペース…
 	Delete Workspace…	ワークスペースを削除…
 	Reset Workspace	ワークスペースをリセット
+	Reset Tool	ツールをリセット
+	Reset All Tools	すべてのツールをリセット
+	Reset all tools to their default settings?	すべてのツールを初期設定に戻しますか？
 	Lock Workspace	ワークスペースをロック
 	Theme	テーマ
 	Pro Theme	プロテーマ
 	Pro Medium Gray Theme	プロ(中間グレー)テーマ
+	Pro Light Gray Theme	プロ(ライトグレー)テーマ
+	Pro Light Theme	プロ(ライト)テーマ
 	Studio Theme	スタジオテーマ
 	Studio Light Theme	スタジオ(ライト)テーマ
 	Adwaita Light Theme	Adwaita(ライト)テーマ
@@ -821,6 +843,9 @@
 	Bend:	曲げ:
 	Bicubic	バイキュービック
 	Bicubic (smooth gradients)	バイキュービック(滑らかな階調)
+	Automatic	自動
+	Bicubic Smoother (enlargement)	バイキュービック法 - 滑らか(拡大)
+	Bicubic Sharper (reduction)	バイキュービック法 - シャープ(縮小)
 	Bilinear	バイリニア
 	Black	黒
 	Black & White	白黒
@@ -1615,6 +1640,8 @@
 	Highlights from:	ハイライトの開始:
 	History Brush Tool	ヒストリーブラシツール
 	Horizontal Type Tool	横書き文字ツール
+	Horizontal Type Mask Tool	横書き文字マスクツール
+	Vertical Type Mask Tool	縦書き文字マスクツール
 	Image Size:	画像サイズ:
 	Inches	インチ
 	Indexed	インデックス
@@ -1669,10 +1696,15 @@
 	Paints from the document's opening state	ドキュメントを開いた時点の状態から描画します
 	Path Selection Tool	パスコンポーネント選択ツール
 	Direct Selection Tool	パス選択ツール
+	Add Anchor Point Tool	アンカーポイントの追加ツール
+	Delete Anchor Point Tool	アンカーポイントの削除ツール
+	Click a segment to add an anchor point · {alt}-click an anchor to delete it	セグメントをクリックしてアンカーポイントを追加 · {alt}+クリック: アンカーポイントを削除
+	Click an anchor point to delete it · {alt}-click a segment to add one	アンカーポイントをクリックして削除 · {alt}+クリック: セグメントにアンカーポイントを追加
 	Pattern Overlay	パターンオーバーレイ
 	Pen Pressure	ペンの筆圧
 	Pen Tilt	ペンの傾き
 	Pen Tool	ペンツール
+	Convert Point Tool	アンカーポイントの変換ツール
 	Photo	写真
 	PhotoCraft website	PhotoCraft の Web サイト
 	Picas	パイカ
@@ -1688,6 +1720,8 @@
 	Postcard	はがき
 	Poster	ポスター
 	Pro (Dark)	プロ(ダーク)
+	Pro (Light)	プロ(ライト)
+	Pro (Light Gray)	プロ(ライトグレー)
 	Pro (Medium Gray)	プロ(中間グレー)
 	Protect Texture	テクスチャを保護
 	Purple	紫
@@ -1800,6 +1834,7 @@
 	Cache tile size	キャッシュタイルのサイズ
 	Camera Raw Defaults	Camera Raw の既定値
 	Canvas border	カンバスの境界
+	Show canvas dots	カンバスのドットを表示
 	Canvas color	カンバスの色
 	Canvas custom color	カンバスのカスタム色
 	Color picker	カラーピッカー
@@ -1887,6 +1922,8 @@
 	Preserve details	ディテールを保持
 	Print resolution	印刷解像度
 	Pro	プロ
+	Pro light	プロ(ライト)
+	Pro light gray	プロ(ライトグレー)
 	Pro medium	プロ(中間)
 	Pro photo	ProPhoto
 	Quick export format	クイック書き出しの形式
@@ -2044,6 +2081,7 @@
 	Apply the pen's tilt and rotation to the tip shape	ペンの傾きと回転を先端のシェイプに適用します
 	Mixer Brush	混合ブラシ
 	Mixer Brush Tool	混合ブラシツール
+	Color Replacement Tool	色の置き換えツール
 	Wet	ウェット
 	Mix	混合
 	Wetness Jitter	ウェットのジッター
@@ -2093,7 +2131,9 @@
 	Developing {name}	{name} を現像中
 	Cancelled {label}	{label} をキャンセルしました
 	Esc to cancel	Esc キーでキャンセル
+	Opened {name}	{name} を開きました
 	Opening {name}	{name} を開いています
+	Saved {name}	{name} を保存しました
 	Saving {name}	{name} を保存しています
 	A save to {name} is still running; try again when it finishes	{name} への保存がまだ実行中です。完了してからもう一度お試しください
 	{label} is writing the file and can no longer be cancelled	{label} はファイルを書き込み中のため、キャンセルできません
@@ -2164,6 +2204,9 @@ cameraRaw	Color	カラー
 	Structure:	構造:
 	Content-Aware Move Tool	コンテンツに応じた移動ツール
 	TIFF Options	TIFF オプション
+	Targa Options	Targa オプション
+	24 bits/pixel	24 ビット/ピクセル
+	32 bits/pixel	32 ビット/ピクセル
 	Including layers will increase file size.	レイヤーを含めるとファイルサイズが大きくなります。
 	Discard Layers and Save a Copy	レイヤーを破棄してコピーを保存
 	Don't show again	次回から表示しない
@@ -2253,6 +2296,19 @@ cameraRaw	Color	カラー
 	Domed	ドーム
 	Domed (Inverted)	ドーム (反転)
 	Diagonal (Descending)	斜め (下降)
+	Contour Editor	輪郭エディター
+	Anti-aliased	アンチエイリアス
+	Corner	コーナー
+	Gloss Contour	光沢輪郭
+	Contour	輪郭
+	Cone - Inverted	円錐 - 反転
+	Cove - Deep	入り江 - 深
+	Cove - Shallow	入り江 - 浅
+	Half Round	半円
+	Ring - Double	リング - ダブル
+	Rolling Slope - Descending	ローリングスロープ - 下降
+	Rounded Steps	丸い階段
+	Sawtooth 1	のこぎり波 1
 
 	Red Eye Tool	赤目ツール
 	Red Eye	赤目
@@ -3451,12 +3507,66 @@ fontWeight	Italic	斜体
 	Quick Selection found nothing there	クイック選択ではそこに何も見つかりませんでした
 	Object Selection found nothing there — try a tighter rectangle	オブジェクト選択ではそこに何も見つかりませんでした — より狭い長方形で試してください
 	No subject found — try a rectangle around the object	被写体が見つかりません — オブジェクトを囲む長方形を試してください
+	Click the first point or press {key} to close · {del} removes a point · Esc cancels	最初の点をクリックするか {key} を押して閉じる · {del} で点を削除 · Esc でキャンセル
+	Click, then move along an edge · click to fasten a point · {alt}-click for a straight segment · double-click to close	クリックしてエッジに沿って動かす · クリックで固定ポイント · {alt}-クリックで直線セグメント · ダブルクリックで閉じる
+	Follows only edges this close to the pointer ([ and ] change it)	ポインターからこの距離内のエッジだけをたどる（[ と ] で変更）
+	Higher values follow only edges that contrast sharply with their surroundings	値を大きくすると、周囲とのコントラストが強いエッジだけをたどる
+	How often fastening points are placed by themselves	固定ポイントが自動で置かれる頻度
+	Appearance Settings…	外観設定…
+	Add to favorites	お気に入りに追加
+	Remove from favorites	お気に入りから削除
+# File Info ▸ Camera Data (read-only EXIF fields; "Make" is the camera maker, not the verb).
+cameraData	Make	メーカー
+cameraData	Model	モデル
+cameraData	Date Taken	撮影日時
+cameraData	Exposure	露出時間
+cameraData	F-Stop	絞り値
+cameraData	ISO Speed	ISO 感度
+cameraData	Focal Length	焦点距離
+cameraData	Focal Length (35 mm)	焦点距離 (35 mm 換算)
+cameraData	Lens	レンズ
+# Shared panel docking
+	Activate Panel	パネルをアクティブにする
+	Change Panel Group	パネルグループを変更
+	Change Panel Layout	パネルレイアウトを変更
+	Close Panel	パネルを閉じる
+	Dock Panel	パネルをドッキング
+	Float Panel	パネルをフロート
+	Move Panel	パネルを移動
+	Group with	グループ化するパネル
+	Panel menu	パネルメニュー
+	Resize panel window	パネルウィンドウのサイズを変更
+	Resize panels	パネルのサイズを変更
 	Use Classic Mode	クラシックモードを使用
 	Auto Center Preview	プレビューを自動的に中央に配置
 	Next Document	次のドキュメント
 	Previous Document	前のドキュメント
 	W x H x Resolution	幅 x 高さ x 解像度
 	Front Image	前面の画像
+	Frame Tool	フレームツール
+	Create a new rectangular frame	新しい長方形フレームを作成
+	Create a new elliptical frame	新しい楕円形フレームを作成
+	Include in playback	再生に含める
+	Perspective Crop Tool	遠近法の切り抜きツール
+	Show Grid	グリッドを表示
+	Drag a box or click four corners · drag the corners onto the edges of a skewed shape · {commit} commits · Esc cancels	ボックスをドラッグするか 4 つの角をクリック · 角を傾いた形の端までドラッグ · {commit} で確定 · Esc でキャンセル
+	Artboard Tool	アートボードツール
+	Make Portrait	縦向きにする
+	Make Landscape	横向きにする
+	Add New Artboard	新規アートボードを追加
+	Freeform Pen Tool	フリーフォームペンツール
+	Curvature Pen Tool	曲線ペンツール
+	Curve Fit:	カーブフィット:
+	Drag: draw freehand · Release on the start point: close	ドラッグ: フリーハンドで描画 · 始点で離す: 閉じる
+	Click: smooth point · Double-click: corner · Drag a point: move · Click first point: close · {key} finish	クリック: スムーズポイント · ダブルクリック: 角 · 点をドラッグ: 移動 · 最初の点をクリック: 閉じる · {key} 完了
+	New Crop Preset…	新規切り抜きプリセット…
+	Delete Crop Preset…	切り抜きプリセットを削除…
+	Select the crop presets to delete:	削除する切り抜きプリセットを選択してください:
+	Select the crop presets to delete	削除する切り抜きプリセットを選択してください
+	Enter a name for the crop preset	切り抜きプリセットの名前を入力してください
+	There is no crop size or ratio to save	保存する切り抜きのサイズまたは比率がありません
+	Scale:	比率:
+	Snap to Origin	原点にスナップ
 	Search settings…	設定を検索…
 	No matching settings	一致する設定はありません
 # Layer Style > effect order (PhotoCraft: a reorderable stack)
@@ -3464,3 +3574,24 @@ fontWeight	Italic	斜体
 	Move Effect Down	効果を下へ移動
 	Reset Order	順序をリセット
 	Stack the effects in Photoshop's order	効果を Photoshop の順序で重ねる
+# Select and Mask view modes (#1754)
+	Onion Skin	オニオンスキン
+	Marching Ants	点線の境界
+	On Black	黒地
+	On White	白地
+	On Layers	レイヤー上
+	Show Edge	エッジを表示
+	Show Original	元の状態を表示
+	F cycles the views; hold X to see the image	F で表示を切り替え、X を押している間は画像を表示
+# Select and Mask Refine Edge Brush (#2972)
+	Refine Edge Brush (R)	境界線調整ブラシ (R)
+	Expand Detection Area	検出領域を拡張
+	Restore Original Edge	元のエッジを復元
+	Paint over hair or fur on the image; Alt paints the other mode	画像の髪や毛の上をペイントします。Alt で反対のモードでペイント
+	Clear Brush Strokes	ブラシストロークを消去
+	Show rulers	定規を表示
+
+# Color Sampler (added with the i18n coverage repair)
+	Click to place · Alt-click or drag off-canvas to remove	クリックで配置 · Alt キーを押しながらクリック、またはカンバス外へドラッグで削除
+	No document open	ドキュメントが開かれていません
+	{n} of {max} sample points	{max} 個中 {n} 個のサンプルポイント

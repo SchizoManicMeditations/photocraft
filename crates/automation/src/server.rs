@@ -90,6 +90,10 @@ pub struct SaveParams {
     /// TIFF: keep the layers (Photoshop layer data). Off by default: a flat TIFF.
     #[serde(default, rename = "tiffLayers")]
     pub tiff_layers: bool,
+    /// TGA: 24 or 32 bits per pixel. 32 writes the alpha channel (or else the transparency) as the
+    /// alpha, 24 none. Unset: 32 with an alpha channel or transparency, else 24.
+    #[serde(default, rename = "tgaBits")]
+    pub tga_bits: Option<u8>,
     #[serde(default)]
     pub index: Option<usize>,
 }
@@ -432,7 +436,7 @@ impl PhotocraftMcp {
         if max_side.is_some_and(|side| side > MAX_PREVIEW_SIDE) {
             return Ok(fail(format!("automation preview side exceeds {MAX_PREVIEW_SIDE} pixels")));
         }
-        let response = match b.call("ui.screenshot", json!({})).await {
+        let response = match b.call_read("ui.screenshot", json!({})).await {
             Ok(response) => response,
             Err(error) => return Ok(fail(error)),
         };
@@ -500,7 +504,7 @@ impl PhotocraftMcp {
         let Some(b) = self.bridge_client() else {
             return Ok(no_backend());
         };
-        to_result(b.call("ui.inspect", json!({})).await)
+        to_result(b.call_read("ui.inspect", json!({})).await)
     }
 
     #[tool(description = "Open an image or document file and make it active. Returns index, size and import warnings.")]
@@ -571,7 +575,7 @@ impl PhotocraftMcp {
             return Ok(no_backend());
         };
         let params = p.index.map(|index| json!({"document": index})).unwrap_or_else(|| json!({}));
-        to_result(b.call("engine.execute", json!({"command": "document.inspect", "params": params})).await)
+        to_result(b.call_read("engine.execute", json!({"command": "document.inspect", "params": params})).await)
     }
 
     #[tool(description = "Render the flattened document and return it as a PNG image (bridge mode: window screenshot).")]
@@ -621,7 +625,7 @@ impl PhotocraftMcp {
             let Some(b) = self.bridge_client() else {
                 return Ok(no_backend());
             };
-            b.call("engine.commands", json!({})).await
+            b.call_read("engine.commands", json!({})).await
         };
         let all = match all {
             Ok(v) => v,
@@ -653,13 +657,13 @@ impl PhotocraftMcp {
     #[tool(description = "List background jobs: running ones with progress (0-1), message and elapsed time, then the last few \
         that ended (state done|failed|cancelled with their result or error). Finished jobs are applied first.")]
     async fn jobs_list(&self) -> Result<CallToolResult, McpError> {
-        self.jobs_call("jobs.list", json!({})).await
+        self.jobs_call("jobs.list", json!({}), true).await
     }
 
     #[tool(description = "Cancel a background job by id (or every running job when `job` is omitted). The document is left \
         unchanged.")]
     async fn jobs_cancel(&self, Parameters(p): Parameters<JobCancelParams>) -> Result<CallToolResult, McpError> {
-        self.jobs_call("jobs.cancel", p.job.map_or_else(|| json!({}), |j| json!({"job": j}))).await
+        self.jobs_call("jobs.cancel", p.job.map_or_else(|| json!({}), |j| json!({"job": j})), false).await
     }
 
     #[tool(description = "Run several engine commands in one call (fewer round trips). Returns {completed, failed, \
@@ -712,7 +716,7 @@ impl PhotocraftMcp {
     )]
     async fn ui_inspect(&self) -> Result<CallToolResult, McpError> {
         match self.bridge_client() {
-            Some(b) => to_result(b.call("ui.inspect", json!({})).await),
+            Some(b) => to_result(b.call_read("ui.inspect", json!({})).await),
             None => bridge_only("ui_inspect"),
         }
     }
@@ -787,8 +791,8 @@ impl PhotocraftMcp {
         to_result(b.call("engine.execute", json!({"command": id, "params": params, "wait": wait})).await)
     }
 
-    /// `jobs.list` / `jobs.cancel` in either backend.
-    async fn jobs_call(&self, method: &'static str, params: Value) -> Result<CallToolResult, McpError> {
+    /// `jobs.list` / `jobs.cancel` in either backend; `read` picks the bridge's retry rule.
+    async fn jobs_call(&self, method: &'static str, params: Value, read: bool) -> Result<CallToolResult, McpError> {
         let p2 = params.clone();
         if let Some(r) = self.headless_op(move |h| h.command_start(method, p2, true)).await {
             return to_result(r);
@@ -796,15 +800,20 @@ impl PhotocraftMcp {
         let Some(b) = self.bridge_client() else {
             return Ok(no_backend());
         };
-        to_result(b.call(method, params).await)
+        if read { to_result(b.call_read(method, params).await) } else { to_result(b.call(method, params).await) }
     }
 
     async fn save_impl(&self, p: SaveParams) -> Result<CallToolResult, McpError> {
+        let tga_bits = match p.tga_bits.map(|b| (b, photocraft_io::TgaBits::from_bits(u64::from(b)))) {
+            None => None,
+            Some((_, Some(bits))) => Some(bits),
+            Some((b, None)) => return Ok(fail(format!("`tgaBits` must be 24 or 32, got {b}"))),
+        };
         if let Some(b) = self.bridge_client() {
             // The bridge forwards to the running app's `app.save`, which takes only an optional
             // path (without one it writes back to the document's own layered file, as headless
-            // does), so the extra options are headless-only. Saying so beats saving with defaults
-            // while the caller believes their quality or format was applied.
+            // does) and the Targa bits, so the other options are headless-only. Saying so beats
+            // saving with defaults while the caller believes their quality or format was applied.
             let unsupported: Vec<&str> = [
                 p.format.is_some().then_some("format"),
                 p.quality.is_some().then_some("quality"),
@@ -817,15 +826,18 @@ impl PhotocraftMcp {
             if !unsupported.is_empty() {
                 return Ok(fail(format!("bridge mode saves with the app's current settings; `{}` need headless mode", unsupported.join("`, `"))));
             }
-            let params = match p.path {
-                Some(path) => json!({"path": path}),
-                None => json!({}),
-            };
+            let mut params = json!({});
+            if let Some(path) = p.path {
+                params["path"] = json!(path);
+            }
+            if let Some(bits) = tga_bits {
+                params["tgaBits"] = json!(bits.bits());
+            }
             return to_result(b.call("app.save", params).await);
         }
         let Some(r) = self
             .headless_op(move |h| {
-                let mut opts = photocraft_io::ExportOptions { tiff_layers: p.tiff_layers, ..Default::default() };
+                let mut opts = photocraft_io::ExportOptions { tiff_layers: p.tiff_layers, tga_bits, ..Default::default() };
                 if let Some(q) = p.quality {
                     opts.encode.jpeg_quality = q.clamp(1, 100);
                     opts.encode.webp_quality = q.clamp(1, 100);

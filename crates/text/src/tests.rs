@@ -418,6 +418,44 @@ fn hit_test_and_caret() {
 }
 
 #[test]
+fn wrapped_and_forced_line_starts_use_the_following_line() {
+    use crate::layout::{byte_index, line_edge, line_index};
+
+    let mut engine = TextEngine::new();
+    let mut wrapped = point("ab cd", 12.0);
+    wrapped.shape = TextShape::Box { x: 0.0, y: 0.0, width: 20.0, height: 70.0 };
+    let layout = engine.layout(&wrapped, 72.0);
+    assert!(layout.lines.len() >= 2, "paragraph must wrap: {:?}", layout.lines);
+    let boundary = layout.lines[1].range.start;
+    assert_eq!(layout.lines[0].range.end, boundary);
+    let index = wrapped.text[..boundary].chars().count();
+    assert_eq!(line_index(&layout, byte_index(&wrapped.text, index)), 1);
+    assert_eq!(line_edge(&layout, &wrapped.text, index, false), index);
+    assert_eq!(line_edge(&layout, &wrapped.text, index, true), wrapped.text[..layout.lines[1].range.end].chars().count());
+    // The previous line's right edge shares the caret index, but a click there
+    // must still report the previous visual line.
+    let first = &layout.lines[0];
+    let (x, y) = layout.to_text(first.x1, first.baseline);
+    assert_eq!(crate::layout::hit_char(&layout, &wrapped.text, x, y).1, 0);
+
+    let text = "a\u{3}b";
+    let forced = engine.layout(&point(text, 12.0), 72.0);
+    assert_eq!(forced.lines.len(), 2);
+    let start = forced.lines[1].range.start;
+    let index = text[..start].chars().count();
+    assert_eq!(line_index(&forced, start), 1);
+    assert_eq!(line_edge(&forced, text, index, false), index);
+    assert_eq!(line_edge(&forced, text, index, true), text.chars().count());
+
+    // A normal paragraph break has distinct boundaries and retains its line.
+    let text = "a\nb";
+    let paragraph = engine.layout(&point(text, 12.0), 72.0);
+    assert_eq!(line_index(&paragraph, paragraph.lines[0].range.end), 0);
+    assert_eq!(line_index(&paragraph, paragraph.lines[1].range.start), 1);
+    assert_eq!(line_index(&paragraph, text.len()), 1);
+}
+
+#[test]
 fn empty_text_and_empty_lines() {
     let mut e = TextEngine::new();
     let l = e.layout(&point("", 12.0), 72.0);

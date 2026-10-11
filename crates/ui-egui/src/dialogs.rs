@@ -92,6 +92,13 @@ fn place_id(d: &Dialog) -> egui::Id {
     }
 }
 
+/// Whether another dialog is drawn above `live` (egui's layer order, back to front).
+fn older_dialog_above(ctx: &egui::Context, live: egui::LayerId, dialogs: &[Dialog]) -> bool {
+    let others: Vec<egui::LayerId> =
+        dialogs.iter().map(|d| egui::LayerId::new(egui::Order::Foreground, egui::Id::new(("dialog", d.id)))).filter(|l| *l != live).collect();
+    ctx.memory(|m| m.layer_ids().skip_while(|l| *l != live).skip(1).any(|l| others.contains(&l)))
+}
+
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     crate::layer_style::color_picker::prune(app);
     crate::type_panels_ui::color_picker::prune(app);
@@ -124,6 +131,14 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             Some(offset) => egui::Modal::default_area(id).anchor(egui::Align2::LEFT_TOP, offset),
             None => egui::Modal::default_area(id),
         };
+        // Only the last dialog takes input, and egui only lets the modal drawn on top take input,
+        // so the last one must be drawn above the others. egui can raise an older one (it raises an
+        // area that is pressed or wasn't drawn the frame before), which left a greyed-out dialog
+        // in front and the live one unreachable behind it. Raise the live one only then: every
+        // frame would also cover its own popups.
+        if interactive && older_dialog_above(ctx, area.layer(), &app.ui.dialogs) {
+            ctx.move_to_top(area.layer());
+        }
         let color_picker = crate::color_picker_ui::owns(&fields);
         let mut modal = egui::Modal::new(id).area(area).backdrop_color(egui::Color32::TRANSPARENT);
         if color_picker {
@@ -210,11 +225,15 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     ui.add_space(8.0);
                     about_tab_body(app, ui, chosen);
                 }
+                DialogKind::Command if crate::guide_layout_ui::owns(&fields) => outcome = crate::guide_layout_ui::body(app, ui, &mut fields, interactive),
                 DialogKind::Command if crate::fill_ui::owns(&fields) => crate::fill_ui::body(app, ui, &mut fields),
+                DialogKind::Command if crate::pattern_fill_ui::owns(&fields) => crate::pattern_fill_ui::body(app, ui, &mut fields),
                 DialogKind::Command if crate::stroke_ui::owns(&fields) => crate::stroke_ui::body(ui, &mut fields),
                 DialogKind::Command if crate::shape_dialog::owns(&fields) => crate::shape_dialog::body(app, ui, &mut fields),
                 DialogKind::Command if crate::delete_layer_prompt::owns(&fields) => crate::delete_layer_prompt::body(ui, &mut fields),
                 DialogKind::Command if crate::rasterize_prompt::owns(&fields) => crate::rasterize_prompt::body(ui, &fields),
+                DialogKind::Command if crate::tool_reset::owns(&fields) => crate::tool_reset::body(ui),
+                DialogKind::Command if crate::crop_presets::owns(&fields) => crate::crop_presets::body(app, ui, &mut fields),
                 DialogKind::Command if crate::variables_ui::owns(&fields) => crate::variables_ui::body(app, ui, &mut fields),
                 DialogKind::Command if crate::file_ui::owns(&fields) => crate::file_ui::body(app, ui, &mut fields),
                 DialogKind::Command if crate::color_picker_ui::owns(&fields) => {
@@ -235,9 +254,15 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     // Long parameter lists (Flame, Lighting Effects) scroll, so the title and the
                     // OK / Cancel buttons stay inside a small window.
                     let room = (ctx.content_rect().height() - DIALOG_CHROME).max(120.0);
-                    first_field_focused(ui, id, |ui| {
-                        egui::ScrollArea::vertical().id_salt(id.with("body")).max_height(room).show(ui, |ui| crate::filter_dialog::body(ui, &mut fields));
-                    });
+                    let body = |ui: &mut egui::Ui, fields: &mut serde_json::Map<String, Value>| {
+                        egui::ScrollArea::vertical().id_salt(id.with("body")).max_height(room).show(ui, |ui| crate::filter_dialog::body(ui, fields));
+                    };
+                    // Select and Mask leaves the keyboard to its view keys (F, X, O, V…).
+                    if crate::select_mask_view::owns(&fields) {
+                        body(ui, &mut fields);
+                    } else {
+                        first_field_focused(ui, id, |ui| body(ui, &mut fields));
+                    }
                 }
                 DialogKind::Command if fields.contains_key("__form") => crate::view_cmds::form_body(ui, &mut fields),
                 DialogKind::Command => {}
@@ -247,7 +272,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 }
             }
             crate::field_tab::end(ui.ctx(), tab);
-            if crate::color_picker_ui::owns(&fields) {
+            if crate::guide_layout_ui::owns(&fields) {
+                // This dialog owns its right-side actions and validates Enter itself.
+            } else if crate::color_picker_ui::owns(&fields) {
                 if interactive && outcome.is_none() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     outcome = Some(true);
                 }
@@ -271,7 +298,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         } else {
                             crate::file_ui::ok_label(&d.fields).unwrap_or(tl!("OK"))
                         };
-                        let ok = DialogButton::new(ButtonRole::Default, ok_label, 84.0);
+                        // Dialogs that need an input first (a preset name, a selection) grey OK out.
+                        let can_ok = crate::crop_presets::can_confirm(app, &fields);
+                        let ok = DialogButton::new(ButtonRole::Default, ok_label, 84.0).enabled(can_ok);
                         // Photoshop: holding Alt turns Cancel into Reset (the dialog stays open).
                         let reset = ui.input(|i| i.modifiers.alt) && crate::adjust_dialog::resets(&fields);
                         let cancel_label = if reset {
@@ -293,7 +322,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                             Some(ButtonRole::Cancel) => outcome = Some(false),
                             Some(ButtonRole::Apply) => apply_requested = true,
                             Some(_) => outcome = Some(true),
-                            None if interactive && ui.input(|i| i.key_pressed(egui::Key::Enter)) => outcome = Some(true),
+                            None if interactive && can_ok && ui.input(|i| i.key_pressed(egui::Key::Enter)) => outcome = Some(true),
                             None => {}
                         }
                     }
@@ -413,6 +442,12 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     if crate::layer_style::color_picker::has_child(app, id) {
         return Err("confirm or cancel the Layer Style color picker first".into());
     }
+    if let Some(d) = app.ui.dialogs.iter().find(|d| d.id == id).filter(|d| crate::guide_layout_ui::owns(&d.fields)) {
+        if app.ui.dialogs.iter().any(|child| crate::color_picker_ui::owns(&child.fields) && child.fields.get("__dialog").and_then(Value::as_u64) == Some(id)) {
+            return Err("confirm or cancel the guide color picker first".into());
+        }
+        crate::guide_layout_ui::validate(app, &d.fields)?;
+    }
     let d = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
     match d.kind {
         DialogKind::NewDocument => {
@@ -425,11 +460,15 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
             }
             r
         }
+        DialogKind::Command if crate::guide_layout_ui::owns(&d.fields) => crate::guide_layout_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::fill_ui::owns(&d.fields) => crate::fill_ui::confirm(app, &d.fields),
+        DialogKind::Command if crate::pattern_fill_ui::owns(&d.fields) => crate::pattern_fill_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::stroke_ui::owns(&d.fields) => crate::stroke_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::shape_dialog::owns(&d.fields) => crate::shape_dialog::confirm(app, &d.fields),
         DialogKind::Command if crate::delete_layer_prompt::owns(&d.fields) => crate::delete_layer_prompt::confirm(app, &d.fields),
         DialogKind::Command if crate::rasterize_prompt::owns(&d.fields) => crate::rasterize_prompt::confirm(app, &d.fields),
+        DialogKind::Command if crate::tool_reset::owns(&d.fields) => crate::tool_reset::confirm(app),
+        DialogKind::Command if crate::crop_presets::owns(&d.fields) => crate::crop_presets::confirm(app, &d.fields),
         DialogKind::Command if crate::variables_ui::owns(&d.fields) => crate::variables_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::file_ui::owns(&d.fields) => crate::file_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::color_picker_ui::owns(&d.fields) => crate::color_picker_ui::confirm(app, &d.fields),
@@ -468,7 +507,10 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
 
 /// Cancel a dialog and its dependent Layer Style picker, without applying edits.
 pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
-    app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
+    let closed = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
+    if crate::guide_layout_ui::owns(&closed.fields) {
+        app.ui.dialogs.retain(|child| child.fields.get("__dialog").and_then(Value::as_u64) != Some(id));
+    }
     app.ui.dialogs.retain(|d| !crate::layer_style::color_picker::child_of(&d.fields, id));
     app.filter_preview = None;
     app.color_range = None;
@@ -480,6 +522,9 @@ pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
 /// schema dialog for filters, the Color Range dialog for `select.colorRange`, otherwise a bare
 /// confirm dialog.
 pub fn open_command_dialog(app: &mut PhotocraftApp, command: &str, label: &str) -> u64 {
+    if command == "view.newGuideLayout" {
+        return crate::guide_layout_ui::open(app);
+    }
     if command == crate::stroke_ui::COMMAND {
         return crate::stroke_ui::open(app);
     }

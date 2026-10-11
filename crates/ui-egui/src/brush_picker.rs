@@ -75,6 +75,16 @@ impl Pick {
     }
 }
 
+pub(crate) fn picker_id() -> egui::Id {
+    egui::Id::new("canvas-brush-picker")
+}
+
+/// All opening paths protect the same frame, including the control channel and options bar.
+pub(crate) fn open(ui: &mut crate::state::UiState, ctx: &egui::Context, at: [f32; 2]) {
+    ui.brush_picker = Some(at);
+    crate::canvas_popup::mark_open(ctx, picker_id());
+}
+
 /// The options-bar brush chip that shows and hides the picker. A press on it isn't an outside
 /// press that closes the picker: the chip's click toggles it.
 pub fn chip_id() -> egui::Id {

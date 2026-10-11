@@ -85,6 +85,29 @@ This is hot switching among the bundled catalogs. Catalog files are embedded wit
 `include_str!`; editing a TSV file requires a rebuild. External catalog watching and
 file-resource hot reload are not implemented.
 
+## Right-to-left languages
+
+Arabic, Hebrew, Persian, Urdu and the other right-to-left languages listed in
+`i18n::dir_for_code` mirror the window's chrome when chosen: the menu bar starts at the right
+with File, the toolbox docks on the right and the panel dock and its rail on the left, and the
+title, options and status bars read from the right (`crates/ui-egui/src/direction.rs`). The
+direction follows the language code, so a catalog needs no extra setting.
+
+Not mirrored yet: panel interiors, dialogs, menu rows (shortcuts stay on the right), submenus
+(they open to the right), document tabs and the canvas. Before an Arabic catalog reads
+correctly, the UI also needs an Arabic fallback font (the bundled UI fonts have no Arabic
+glyphs) and bidirectional word order: egui 0.36 shapes each right-to-left word with HarfRust,
+so letters join, but lays a line's words out left to right, and its caret indexing is off in
+right-to-left text (emilk/egui#8576, #8577). Document text is laid out by the text engine.
+
+No right-to-left catalog ships yet. To check the mirrored layout with any language, launch with
+`PHOTOCRAFT_UI_DIRECTION=rtl` (or `ltr` to force left-to-right); it is read once per process
+and has no effect on the web build:
+
+```sh
+PHOTOCRAFT_UI_DIRECTION=rtl cargo run -p photocraft-ui-egui --example snapshot -- --out rtl.png
+```
+
 ## Fonts
 
 The native lazy CJK font loader prioritises the selected Japanese, Korean or Chinese script.

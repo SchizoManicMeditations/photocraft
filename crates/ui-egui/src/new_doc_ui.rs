@@ -6,6 +6,8 @@
 use egui::{Align2, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
 use serde_json::{Map, Value, json};
 
+use photocraft_engine::prefs::UnitsAndRulers;
+
 use crate::theme::Tokens;
 use crate::{icons, widgets};
 
@@ -111,7 +113,7 @@ pub fn set_clipboard(f: &mut Map<String, Value>, w: u32, h: u32) {
         return;
     }
     f.insert("__clipboard".into(), json!([w, h]));
-    apply_preset(f, &(CLIPBOARD, w, h, 72.0));
+    apply_preset(f, &(CLIPBOARD, w, h, 72.0), &UnitsAndRulers::default());
 }
 
 /// The clipboard image's size, when the dialog offers the Clipboard preset.
@@ -163,15 +165,39 @@ pub fn swap_size(f: &mut Map<String, Value>) {
     }
 }
 
-/// Apply a preset to the dialog fields.
-pub fn apply_preset(f: &mut Map<String, Value>, p: &Preset) {
+/// Print and photo presets (listed at 300 ppi) are specified in inches, screen presets in pixels.
+fn is_print(p: &Preset) -> bool {
+    p.3 >= 300.0
+}
+
+/// A built-in preset at Preferences › Units & Rulers › New Document Preset Resolutions, as in
+/// Photoshop: a print preset keeps its size in inches at the Print Resolution (Letter at 200 ppi is
+/// 1700 x 2200 px), a screen preset keeps its pixels at the Screen Resolution. The Clipboard preset
+/// is the copied pixels and keeps its own resolution. A resolution that isn't a positive finite
+/// number leaves the preset as listed.
+pub fn at_pref_resolutions(p: &Preset, units: &UnitsAndRulers) -> Preset {
+    let ppi = (if is_print(p) { units.print_resolution } else { units.screen_resolution }) as f32;
+    if p.0 == CLIPBOARD || !(ppi.is_finite() && ppi > 0.0) {
+        return *p;
+    }
+    if !is_print(p) {
+        return (p.0, p.1, p.2, ppi);
+    }
+    let scale = ppi / p.3;
+    let px = |v: u32| (v as f32 * scale).round().clamp(1.0, 300_000.0) as u32;
+    (p.0, px(p.1), px(p.2), ppi)
+}
+
+/// Apply a built-in preset (at the preference resolutions, see [`at_pref_resolutions`]) to the
+/// dialog fields.
+pub fn apply_preset(f: &mut Map<String, Value>, p: &Preset, units: &UnitsAndRulers) {
+    let (name, w, h, ppi) = at_pref_resolutions(p, units);
     f.remove("__savedPreset");
-    f.insert("width".into(), json!(p.1));
-    f.insert("height".into(), json!(p.2));
-    f.insert("resolution".into(), json!(p.3));
-    f.insert("__preset".into(), json!(p.0));
-    // Print and photo presets are specified in inches, screen presets in pixels.
-    f.insert("__unit".into(), json!(if p.3 >= 300.0 { "in" } else { "px" }));
+    f.insert("width".into(), json!(w));
+    f.insert("height".into(), json!(h));
+    f.insert("resolution".into(), json!(ppi));
+    f.insert("__preset".into(), json!(name));
+    f.insert("__unit".into(), json!(if is_print(p) { "in" } else { "px" }));
 }
 
 /// Fields `file.new` takes (drops the dialog's `__` UI keys).
@@ -358,6 +384,7 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
     // The clipboard image's size comes first among the Recent presets.
     let presets: Vec<Preset> = clipboard_preset(f).filter(|_| cat == CATEGORIES[0].0).into_iter().chain(presets.iter().copied()).collect();
     let chosen = get_s(f, "__preset", "");
+    let units = app.session.prefs().units_and_rulers.clone();
     ui.horizontal_top(|ui| {
         // Left: preset grid.
         ui.vertical(|ui| {
@@ -372,7 +399,8 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
             for row in presets.chunks(3) {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
-                    for p in row {
+                    for listed in row {
+                        let p = &at_pref_resolutions(listed, &units);
                         let (r, resp) = ui.allocate_exact_size(card, Sense::click());
                         let on = chosen == p.0;
                         ui.painter().rect_filled(
@@ -393,8 +421,7 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
                         let title = card_title(ui.painter(), tl!(p.0), card.x - 12.0, t.text);
                         let elided = title.elided;
                         ui.painter().galley(pos2(r.center().x, r.top() + 70.0 - title.size().y / 2.0), title, t.text);
-                        let unit = if p.3 >= 300.0 { "in" } else { "px" };
-                        let size = if unit == "in" {
+                        let size = if is_print(listed) {
                             format!(
                                 "{} x {} in @ {} ppi",
                                 widgets::fmt_num(to_unit(p.1 as f32, "in", p.3) as f64),
@@ -407,7 +434,7 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
                         ui.painter().text(pos2(r.center().x, r.top() + 97.0), Align2::CENTER_CENTER, size, egui::FontId::proportional(10.5), t.text_faint);
                         let resp = if elided { resp.on_hover_text(tl!(p.0)) } else { resp };
                         if resp.clicked() {
-                            apply_preset(f, p);
+                            apply_preset(f, listed, &units);
                             create |= resp.double_clicked() || resp.triple_clicked();
                         }
                     }
@@ -577,7 +604,7 @@ mod tests {
     fn resolution_keeps_physical_size_in_physical_units_and_pixels_in_px() {
         let a4 = CATEGORIES.iter().find(|c| c.0 == "Print").unwrap().1.iter().find(|p| p.0 == "A4").unwrap();
         let mut f = crate::state::UiState::new_document_fields();
-        apply_preset(&mut f, a4);
+        apply_preset(&mut f, a4, &Default::default());
         f.insert("__unit".into(), json!("in"));
         set_resolution(&mut f, 150.0);
         let p = command_params(&f);
@@ -585,11 +612,46 @@ mod tests {
         assert!(!f.contains_key("__preset"));
 
         let mut f = crate::state::UiState::new_document_fields();
-        apply_preset(&mut f, a4);
+        apply_preset(&mut f, a4, &Default::default());
         f.insert("__unit".into(), json!("px"));
         set_resolution(&mut f, 150.0);
         let p = command_params(&f);
         assert_eq!((p["width"].clone(), p["height"].clone(), p["resolution"].clone()), (json!(2480), json!(3508), json!(150.0)));
+    }
+
+    /// Units & Rulers › New Document Preset Resolutions: print presets keep their inches at the
+    /// Print Resolution, screen presets keep their pixels at the Screen Resolution.
+    #[test]
+    fn presets_follow_the_preset_resolution_preferences() {
+        let find = |cat: &str, name: &str| *CATEGORIES.iter().find(|c| c.0 == cat).unwrap().1.iter().find(|p| p.0 == name).unwrap();
+        let (letter, web) = (find("Print", "Letter"), find("Web", "Web Minimum"));
+        let stock = UnitsAndRulers::default();
+        assert_eq!(at_pref_resolutions(&letter, &stock), letter, "the defaults are the listed sizes");
+        assert_eq!(at_pref_resolutions(&web, &stock), web);
+
+        let units = UnitsAndRulers { print_resolution: 200.0, screen_resolution: 96.0, ..stock.clone() };
+        assert_eq!(at_pref_resolutions(&letter, &units), ("Letter", 1700, 2200, 200.0), "8.5 x 11 in at 200 ppi");
+        assert_eq!(at_pref_resolutions(&find("Print", "A4"), &units), ("A4", 1653, 2339, 200.0));
+        assert_eq!(at_pref_resolutions(&web, &units), ("Web Minimum", 1024, 768, 96.0), "pixels kept");
+        let clipboard = (CLIPBOARD, 123, 45, 72.0);
+        assert_eq!(at_pref_resolutions(&clipboard, &units), clipboard, "the copied pixels keep their resolution");
+
+        let mut f = crate::state::UiState::new_document_fields();
+        apply_preset(&mut f, &letter, &units);
+        assert_eq!((f["width"].as_u64(), f["height"].as_u64(), f["resolution"].as_f64()), (Some(1700), Some(2200), Some(200.0)));
+        assert_eq!((f["__preset"].as_str(), f["__unit"].as_str()), (Some("Letter"), Some("in")), "still a print preset below 300 ppi");
+        apply_preset(&mut f, &web, &units);
+        assert_eq!((f["width"].as_u64(), f["resolution"].as_f64(), f["__unit"].as_str()), (Some(1024), Some(96.0), Some("px")));
+
+        // Out-of-range values (a hand-edited preferences file) never make an unusable size.
+        for bad in [0.0, -5.0, f64::NAN, f64::INFINITY] {
+            let units = UnitsAndRulers { print_resolution: bad, screen_resolution: bad, ..stock.clone() };
+            assert_eq!(at_pref_resolutions(&letter, &units), letter, "{bad}");
+            assert_eq!(at_pref_resolutions(&web, &units), web, "{bad}");
+        }
+        let huge = UnitsAndRulers { print_resolution: 1e9, ..stock };
+        let (_, w, h, _) = at_pref_resolutions(&find("Art & Illustration", "Poster"), &huge);
+        assert_eq!((w, h), (300_000, 300_000), "clamped to the file.new limit");
     }
 
     #[test]
@@ -640,7 +702,7 @@ mod tests {
     fn preset_sets_size_resolution_and_create_params_drop_ui_keys() {
         let mut f = crate::state::UiState::new_document_fields();
         let a4 = CATEGORIES.iter().find(|c| c.0 == "Print").unwrap().1.iter().find(|p| p.0 == "A4").unwrap();
-        apply_preset(&mut f, a4);
+        apply_preset(&mut f, a4, &Default::default());
         let p = command_params(&f);
         assert_eq!(p["width"], 2480);
         assert_eq!(p["height"], 3508);
@@ -680,7 +742,7 @@ mod tests {
         assert_eq!(command_params(&f), expected);
         f.insert("width".into(), json!(42));
         assert_eq!(session.presets.documents[0], preset, "editing the form does not edit the snapshot");
-        apply_preset(&mut f, &(CLIPBOARD, 20, 30, 72.0));
+        apply_preset(&mut f, &(CLIPBOARD, 20, 30, 72.0), &Default::default());
         assert!(f.get("__savedPreset").is_none());
         assert_eq!((f["width"].as_u64(), f["height"].as_u64()), (Some(20), Some(30)));
     }
@@ -914,7 +976,7 @@ mod tests {
             let mut h = harness();
             let mut f = fields(&h);
             super::super::set_clipboard(&mut f, 37, 23);
-            apply_preset(&mut f, &("Other size", 100, 200, 300.0));
+            apply_preset(&mut f, &("Other size", 100, 200, 300.0), &Default::default());
             f.extend(serde_json::json!({"mode":"gray","depth":8,"background":"white"}).as_object().unwrap().clone());
             set_fields(&mut h, f);
             let at = preset_title_at(&h, super::super::CLIPBOARD);
@@ -964,6 +1026,29 @@ mod tests {
         }
 
         #[test]
+        fn preset_cards_use_the_preset_resolution_preferences() {
+            let mut h = harness();
+            h.state_mut().run("prefs.set", serde_json::json!({"path": "unitsAndRulers.printResolution", "value": 150.0})).unwrap();
+            h.state_mut().run("prefs.set", serde_json::json!({"path": "unitsAndRulers.screenResolution", "value": 96.0})).unwrap();
+            h.get_by_label("Photo").click();
+            h.run_steps(2);
+            let at = preset_title_at(&h, "Landscape, 6 x 4");
+            click_at(&mut h, at);
+            assert_eq!(fields(&h)["__unit"], "in");
+            second_click_creates_once(&mut h, at);
+            assert_eq!(created(&h), (900, 600, 150.0), "6 x 4 in at 150 ppi");
+
+            h.state_mut().ui.open_dialog(DialogKind::NewDocument, UiState::new_document_fields());
+            h.run_steps(2);
+            h.get_by_label("Web").click();
+            h.run_steps(2);
+            let at = preset_title_at(&h, "Web Minimum");
+            click_at(&mut h, at);
+            enter(&mut h);
+            assert_eq!(created(&h), (1024, 768, 96.0));
+        }
+
+        #[test]
         fn arithmetic_dimensions_create_the_evaluated_size() {
             let mut h = harness();
             type_into(&mut h, 0, "1920/2");
@@ -999,7 +1084,7 @@ mod tests {
             let mut h = harness();
             let mut f = fields(&h);
             let web = CATEGORIES.iter().find(|c| c.0 == "Web").unwrap().1.iter().find(|p| p.0 == "Web Minimum").unwrap();
-            apply_preset(&mut f, web);
+            apply_preset(&mut f, web, &Default::default());
             set_fields(&mut h, f);
             type_into(&mut h, 0, "512");
             type_into(&mut h, 1, "512");

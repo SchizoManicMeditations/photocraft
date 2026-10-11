@@ -15,6 +15,24 @@
 # entries the same way. Product and technology names (PhotoCraft, ArtCraft, OpenType, CMYK, Lab ...)
 # stay as they are; the trailing "…" of dialog commands is kept.
 
+# Guide layout dialog
+	Rows	Linhas
+	Number	Número
+	Margin	Margem
+	Top:	Superior:
+	Left:	Esquerda:
+	Bottom:	Inferior:
+	Right:	Direita:
+	Target:	Destino:
+	Selected Artboards	Pranchetas selecionadas
+	Center Columns	Centralizar colunas
+	Clear Existing Guides	Limpar guias existentes
+	Invalid guide layout	Layout de guias inválido
+	Leave empty for automatic size	Deixe vazio para tamanho automático
+	5 Columns, 3 Rows	5 colunas, 3 linhas
+	8 Columns	8 colunas
+	12 Columns	12 colunas
+
 	File	Arquivo
 	Edit	Editar
 	Image	Imagem
@@ -667,10 +685,15 @@
 	New Workspace…	Novo espaço de trabalho…
 	Delete Workspace…	Excluir espaço de trabalho…
 	Reset Workspace	Redefinir espaço de trabalho
+	Reset Tool	Redefinir ferramenta
+	Reset All Tools	Redefinir todas as ferramentas
+	Reset all tools to their default settings?	Redefinir todas as ferramentas para as configurações padrão?
 	Lock Workspace	Bloquear espaço de trabalho
 	Theme	Tema
 	Pro Theme	Tema Pro
 	Pro Medium Gray Theme	Tema Pro cinza médio
+	Pro Light Gray Theme	Tema Pro cinza claro
+	Pro Light Theme	Tema Pro claro
 	Studio Theme	Tema Studio
 	Studio Light Theme	Tema Studio claro
 	Adwaita Light Theme	Tema Adwaita claro
@@ -803,6 +826,9 @@
 	Bend:	Curvatura:
 	Bicubic	Bicúbica
 	Bicubic (smooth gradients)	Bicúbica (degradês suaves)
+	Automatic	Automático
+	Bicubic Smoother (enlargement)	Bicúbica mais suave (ampliação)
+	Bicubic Sharper (reduction)	Bicúbica mais nítida (redução)
 	Bilinear	Bilinear
 	Black	Preto
 	Black & White	Preto e branco
@@ -1589,6 +1615,8 @@
 	Highlights from:	Realces a partir de:
 	History Brush Tool	Ferramenta Pincel do histórico
 	Horizontal Type Tool	Ferramenta Texto horizontal
+	Horizontal Type Mask Tool	Ferramenta Máscara de texto horizontal
+	Vertical Type Mask Tool	Ferramenta Máscara de texto vertical
 	Image Size:	Tamanho:
 	Inches	Polegadas
 	Indexed	Indexado
@@ -1643,10 +1671,15 @@
 	Paints from the document's opening state	Pinta a partir do estado de abertura do documento
 	Path Selection Tool	Ferramenta Seleção de demarcador
 	Direct Selection Tool	Ferramenta Seleção direta
+	Add Anchor Point Tool	Ferramenta Adicionar ponto de ancoragem
+	Delete Anchor Point Tool	Ferramenta Excluir ponto de ancoragem
+	Click a segment to add an anchor point · {alt}-click an anchor to delete it	Clique em um segmento para adicionar um ponto de ancoragem · {alt}-clique em um ponto de ancoragem para excluí-lo
+	Click an anchor point to delete it · {alt}-click a segment to add one	Clique em um ponto de ancoragem para excluí-lo · {alt}-clique em um segmento para adicionar um
 	Pattern Overlay	Sobreposição de padrão
 	Pen Pressure	Pressão da caneta
 	Pen Tilt	Inclinação da caneta
 	Pen Tool	Ferramenta Caneta
+	Convert Point Tool	Ferramenta Converter ponto
 	Photo	Foto
 	PhotoCraft website	Site do PhotoCraft
 	Picas	Paicas
@@ -1662,6 +1695,8 @@
 	Postcard	Cartão-postal
 	Poster	Pôster
 	Pro (Dark)	Pro (escuro)
+	Pro (Light)	Pro (claro)
+	Pro (Light Gray)	Pro (cinza claro)
 	Pro (Medium Gray)	Pro (cinza médio)
 	Protect Texture	Proteger textura
 	Purple	Roxo
@@ -1768,6 +1803,7 @@
 	Cache tile size	Tamanho do bloco do cache
 	Camera Raw Defaults	Padrões do Camera Raw
 	Canvas border	Borda da tela de pintura
+	Show canvas dots	Mostrar pontos da tela de pintura
 	Canvas color	Cor da tela de pintura
 	Canvas custom color	Cor personalizada da tela de pintura
 	Color picker	Seletor de cores
@@ -1855,6 +1891,8 @@
 	Preserve details	Preservar detalhes
 	Print resolution	Resolução de impressão
 	Pro	Pro
+	Pro light	Pro claro
+	Pro light gray	Pro cinza claro
 	Pro medium	Pro médio
 	Pro photo	ProPhoto
 	Quick export format	Formato da exportação rápida
@@ -2057,7 +2095,9 @@
 	Developing {name}	Revelando {name}
 	Cancelled {label}	{label} cancelado
 	Esc to cancel	Esc para cancelar
+	Opened {name}	Aberto: {name}
 	Opening {name}	Abrindo {name}
+	Saved {name}	Salvo: {name}
 	Saving {name}	Salvando {name}
 	A save to {name} is still running; try again when it finishes	Um salvamento em {name} ainda está em andamento; tente novamente quando terminar
 	{label} is writing the file and can no longer be cancelled	{label} está gravando o arquivo e não pode mais ser cancelado
@@ -2540,6 +2580,7 @@
 	Edit › Paste	Editar › Colar
 	Use File › Open, or paste a copied image with {paste}.	Use Arquivo › Abrir ou cole uma imagem copiada com {paste}.
 	Mixer Brush Tool	Ferramenta Pincel misturador
+	Color Replacement Tool	Ferramenta Substituição de cor
 	Invalid {mode} profile	Perfil {mode} inválido
 	Unnamed {mode} profile	Perfil {mode} sem nome
 	Show bounding box when dragging layer	Mostrar caixa delimitadora ao arrastar a camada
@@ -2614,6 +2655,9 @@ cameraRaw	Whites	Brancos
 	Structure:	Estrutura:
 	Content-Aware Move Tool	Ferramenta Mover com reconhecimento de conteúdo
 	TIFF Options	Opções de TIFF
+	Targa Options	Opções de Targa
+	24 bits/pixel	24 bits/pixel
+	32 bits/pixel	32 bits/pixel
 	Including layers will increase file size.	Incluir as camadas aumentará o tamanho do arquivo.
 	Discard Layers and Save a Copy	Descartar camadas e salvar uma cópia
 	Don't show again	Não mostrar novamente
@@ -2707,6 +2751,21 @@ cameraRaw	Whites	Brancos
 	Domed	Abaulado
 	Domed (Inverted)	Abaulado (invertido)
 	Diagonal (Descending)	Diagonal (descendente)
+	Contour Editor	Editor de contorno
+	Anti-aliased	Suavizado
+	Corner	Canto
+	Gloss Contour	Contorno de brilho
+	Contour	Contorno
+	Cone - Inverted	Cone - invertido
+	Cove - Deep	Enseada - profunda
+	Cove - Shallow	Enseada - rasa
+	Gaussian	Gaussiana
+	Half Round	Meio-círculo
+	Ring	Anel
+	Ring - Double	Anel - duplo
+	Rolling Slope - Descending	Declive ondulado - descendente
+	Rounded Steps	Degraus arredondados
+	Sawtooth 1	Dente de serra 1
 
 	Red Eye Tool	Ferramenta Olhos vermelhos
 	Pupil Size	Tamanho da pupila
@@ -2858,12 +2917,66 @@ fontWeight	Italic	Itálico
 	Quick Selection found nothing there	A Seleção rápida não encontrou nada ali
 	Object Selection found nothing there — try a tighter rectangle	A Seleção de objeto não encontrou nada ali — tente um retângulo mais justo
 	No subject found — try a rectangle around the object	Nenhum assunto encontrado — tente um retângulo ao redor do objeto
+	Click the first point or press {key} to close · {del} removes a point · Esc cancels	Clique no primeiro ponto ou pressione {key} para fechar · {del} remove um ponto · Esc cancela
+	Click, then move along an edge · click to fasten a point · {alt}-click for a straight segment · double-click to close	Clique e siga uma borda · clique para fixar um ponto · {alt}-clique para um segmento reto · clique duas vezes para fechar
+	Follows only edges this close to the pointer ([ and ] change it)	Segue só bordas a esta distância do ponteiro ([ e ] mudam o valor)
+	Higher values follow only edges that contrast sharply with their surroundings	Valores altos seguem só bordas com forte contraste com o entorno
+	How often fastening points are placed by themselves	Com que frequência os pontos de fixação são colocados sozinhos
+	Appearance Settings…	Configurações de aparência…
+	Add to favorites	Adicionar aos favoritos
+	Remove from favorites	Remover dos favoritos
+# File Info ▸ Camera Data (read-only EXIF fields; "Make" is the camera maker, not the verb).
+cameraData	Make	Fabricante
+cameraData	Model	Modelo
+cameraData	Date Taken	Data de captura
+cameraData	Exposure	Tempo de exposição
+cameraData	F-Stop	Abertura
+cameraData	ISO Speed	Sensibilidade ISO
+cameraData	Focal Length	Distância focal
+cameraData	Focal Length (35 mm)	Distância focal (35 mm)
+cameraData	Lens	Lente
+# Shared panel docking
+	Activate Panel	Ativar painel
+	Change Panel Group	Alterar grupo de painéis
+	Change Panel Layout	Alterar disposição dos painéis
+	Close Panel	Fechar painel
+	Dock Panel	Encaixar painel
+	Float Panel	Painel flutuante
+	Move Panel	Mover painel
+	Group with	Agrupar com
+	Panel menu	Menu do painel
+	Resize panel window	Redimensionar janela do painel
+	Resize panels	Redimensionar painéis
 	Use Classic Mode	Usar modo clássico
 	Auto Center Preview	Centralizar visualização automaticamente
 	Next Document	Próximo documento
 	Previous Document	Documento anterior
 	W x H x Resolution	L x A x Resolução
 	Front Image	Imagem frontal
+	Frame Tool	Ferramenta Quadro
+	Create a new rectangular frame	Criar um quadro retangular
+	Create a new elliptical frame	Criar um quadro elíptico
+	Include in playback	Incluir na reprodução
+	Perspective Crop Tool	Ferramenta Corte demarcado em perspectiva
+	Show Grid	Mostrar grade
+	Drag a box or click four corners · drag the corners onto the edges of a skewed shape · {commit} commits · Esc cancels	Arraste uma caixa ou clique em quatro cantos · arraste os cantos até as bordas de uma forma inclinada · {commit} confirma · Esc cancela
+	Artboard Tool	Ferramenta Prancheta
+	Make Portrait	Tornar retrato
+	Make Landscape	Tornar paisagem
+	Add New Artboard	Adicionar nova prancheta
+	Freeform Pen Tool	Ferramenta Caneta de forma livre
+	Curvature Pen Tool	Ferramenta Caneta de curvatura
+	Curve Fit:	Ajuste de curva:
+	Drag: draw freehand · Release on the start point: close	Arrastar: desenhar à mão livre · Soltar no ponto inicial: fechar
+	Click: smooth point · Double-click: corner · Drag a point: move · Click first point: close · {key} finish	Clique: ponto suave · Clique duplo: canto · Arrastar um ponto: mover · Clique no primeiro ponto: fechar · {key}: concluir
+	New Crop Preset…	Nova predefinição de corte…
+	Delete Crop Preset…	Excluir predefinição de corte…
+	Select the crop presets to delete:	Selecione as predefinições de corte a excluir:
+	Select the crop presets to delete	Selecione as predefinições de corte a excluir
+	Enter a name for the crop preset	Digite um nome para a predefinição de corte
+	There is no crop size or ratio to save	Não há tamanho nem proporção de corte para salvar
+	Scale:	Escala:
+	Snap to Origin	Ajustar à origem
 	Search settings…	Pesquisar configurações…
 	No matching settings	Nenhuma configuração encontrada
 # Layer Style > effect order (PhotoCraft: a reorderable stack)
@@ -2871,3 +2984,24 @@ fontWeight	Italic	Itálico
 	Move Effect Down	Mover efeito para baixo
 	Reset Order	Redefinir ordem
 	Stack the effects in Photoshop's order	Empilhar os efeitos na ordem do Photoshop
+# Select and Mask view modes (#1754)
+	Onion Skin	Papel vegetal
+	Marching Ants	Formigas marchando
+	On Black	Sobre preto
+	On White	Sobre branco
+	On Layers	Sobre camadas
+	Show Edge	Mostrar borda
+	Show Original	Mostrar original
+	F cycles the views; hold X to see the image	F alterna as visualizações; segure X para ver a imagem
+# Select and Mask Refine Edge Brush (#2972)
+	Refine Edge Brush (R)	Pincel de refinamento de borda (R)
+	Expand Detection Area	Expandir área de detecção
+	Restore Original Edge	Restaurar borda original
+	Paint over hair or fur on the image; Alt paints the other mode	Pinte sobre cabelo ou pelo na imagem; Alt pinta no outro modo
+	Clear Brush Strokes	Limpar traços do pincel
+	Show rulers	Mostrar réguas
+
+# Color Sampler (added with the i18n coverage repair)
+	Click to place · Alt-click or drag off-canvas to remove	Clique para posicionar · Alt-clique ou arraste para fora da tela para remover
+	No document open	Nenhum documento aberto
+	{n} of {max} sample points	{n} de {max} pontos de amostragem

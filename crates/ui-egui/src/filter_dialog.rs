@@ -18,7 +18,10 @@ pub enum Kind {
         max: f32,
         default: f32,
     },
-    Choice(Vec<String>),
+    Choice {
+        options: Vec<String>,
+        default: Option<String>,
+    },
     Bool(bool),
     Int {
         default: i64,
@@ -80,8 +83,22 @@ pub fn parse_spec(spec: &str) -> Vec<Param> {
         }
         let v = v.trim();
         let kind = if let Some(choices) = v.strip_prefix('"') {
-            let body = choices.split('"').next().unwrap_or("");
-            Kind::Choice(body.split('|').map(str::to_string).collect())
+            let (body, rest) = choices.split_once('"').unwrap_or((choices, ""));
+            let options: Vec<String> = body.split('|').map(str::to_string).collect();
+            let default = if let Some((_, def_part)) = rest.split_once('=') {
+                let trimmed = def_part.trim();
+                let def = if let Some(unquoted) = trimmed.strip_prefix('"') {
+                    unquoted.split('"').next().unwrap_or("")
+                } else if let Some(unquoted) = trimmed.strip_prefix('\'') {
+                    unquoted.split('\'').next().unwrap_or("")
+                } else {
+                    trimmed.split(|c: char| c.is_whitespace() || c == '(' || c == ')' || c == ',' || c == '}').next().unwrap_or("")
+                };
+                if !def.is_empty() && options.iter().any(|opt| opt == def) { Some(def.to_string()) } else { None }
+            } else {
+                None
+            };
+            Kind::Choice { options, default }
         } else if let Some(rest) = v.strip_prefix("bool") {
             Kind::Bool(rest.trim_start_matches('=').trim() == "true")
         } else if v == "text" {
@@ -278,7 +295,7 @@ pub fn has_dialog(command: &str) -> bool {
 fn rememberable(kind: &Kind, value: &Value) -> bool {
     match kind {
         Kind::Range { min, max, .. } => value.as_f64().is_some_and(|n| n.is_finite() && n >= f64::from(*min) && n <= f64::from(*max)),
-        Kind::Choice(choices) => value.as_str().is_some_and(|v| choices.iter().any(|choice| choice == v)),
+        Kind::Choice { options, .. } => value.as_str().is_some_and(|v| options.iter().any(|choice| choice == v)),
         Kind::Bool(_) => value.is_boolean(),
         Kind::Int { .. } => value.as_i64().is_some(),
         _ => false,
@@ -313,14 +330,18 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
     fields.insert("__command".into(), json!(command));
     fields.insert("__label".into(), json!(spec.label));
     fields.insert("__filter".into(), json!(true));
-    if command.starts_with("filter.") || PREVIEWED.contains(&command) {
+    // Select and Mask previews in its view modes (`select_mask_view`), not as the command's result.
+    if command.starts_with("filter.") || PREVIEWED.contains(&command) || command == crate::select_mask_view::COMMAND {
         fields.insert("__preview".into(), json!(true));
     }
     for p in parse_spec(spec.params) {
         let v = match &p.kind {
             Kind::Range { default, .. } if command == "image.mode.indexedColor" && p.key == "colors" => json!(default.round().clamp(2.0, 256.0) as u32),
             Kind::Range { default, .. } => json!(default),
-            Kind::Choice(c) => json!(c.first().cloned().unwrap_or_default()),
+            Kind::Choice { options, default } => {
+                let initial = default.as_deref().or_else(|| options.first().map(String::as_str)).unwrap_or("");
+                json!(initial)
+            }
             Kind::Bool(default) => json!(default),
             Kind::Int { default } => json!(default),
             Kind::Text => json!(""),
@@ -346,6 +367,12 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
     // Photoshop's Pattern Name dialog starts from the name the pattern would get anyway.
     if command == "edit.definePattern" {
         fields.insert("name".into(), json!(photocraft_engine::pattern_cmds::default_name(&app.session)));
+    }
+    if command == "layer.layerStyle.globalLight" {
+        global_light_defaults(app, &mut fields);
+    }
+    if command == "view.proofSetup" {
+        proof_setup_defaults(app, &mut fields);
     }
     if parse_spec(spec.params).iter().any(|p| p.kind == Kind::Document) {
         // The document picker lists every open document (params refer to them by index).
@@ -390,6 +417,23 @@ fn warp_defaults(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
     fields.insert("orientation".into(), json!(if w.horizontal { "horizontal" } else { "vertical" }));
 }
 
+/// Global Light reflects the active document's current shared lighting, never remembered values.
+fn global_light_defaults(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
+    let Some(st) = app.session.active() else { return };
+    fields.insert("angle".into(), json!(st.doc.global_light.angle));
+    fields.insert("altitude".into(), json!(st.doc.global_light.altitude));
+}
+
+/// Proof Setup reflects the active document's current proofing condition, never remembered values.
+fn proof_setup_defaults(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
+    let Some(st) = app.session.active() else { return };
+    let pv = app.session.color.proof(st.doc.id);
+    fields.insert("profile".into(), json!(pv.setup.name));
+    fields.insert("intent".into(), json!(pv.setup.intent.id()));
+    fields.insert("bpc".into(), json!(pv.setup.bpc));
+    fields.insert("simulatePaper".into(), json!(pv.setup.simulate_paper));
+}
+
 /// A filter dialog with live preview for `command` whose parameters follow `spec` (registry
 /// notation) instead of the command's own; `fixed` params (e.g. a plug-in id) are passed through.
 pub fn open_with_spec(app: &mut PhotocraftApp, command: &str, label: &str, spec: &str, fixed: Map<String, Value>) -> u64 {
@@ -402,7 +446,10 @@ pub fn open_with_spec(app: &mut PhotocraftApp, command: &str, label: &str, spec:
     for p in parse_spec(spec) {
         let v = match &p.kind {
             Kind::Range { default, .. } => json!(default),
-            Kind::Choice(c) => json!(c.first().cloned().unwrap_or_default()),
+            Kind::Choice { options, default } => {
+                let initial = default.as_deref().or_else(|| options.first().map(String::as_str)).unwrap_or("");
+                json!(initial)
+            }
             Kind::Bool(default) => json!(default),
             Kind::Int { default } => json!(default),
             Kind::Color(Some(rgb)) => json!(crate::color_picker_ui::hex(*rgb)),
@@ -453,6 +500,9 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             None => return,
         },
     };
+    if crate::select_mask_view::owns(f) {
+        crate::select_mask_view::controls(ui, f);
+    }
     for p in parse_spec(&spec) {
         match p.kind {
             Kind::Range { min, max, default } => {
@@ -493,10 +543,11 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 let scale = if max - min <= 10.0 { 100.0 } else { 10.0 };
                 f.insert(p.key, json!((v * scale).round() / scale));
             }
-            Kind::Choice(options) => {
+            Kind::Choice { options, default } => {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(label(&p.key)).color(t.text_dim));
-                    let mut cur = f.get(&p.key).and_then(Value::as_str).unwrap_or(&options[0]).to_string();
+                    let initial = default.as_deref().or_else(|| options.first().map(String::as_str)).unwrap_or("");
+                    let mut cur = f.get(&p.key).and_then(Value::as_str).unwrap_or(initial).to_string();
                     let labels: Vec<String> = options.iter().map(|o| choice_label(o)).collect();
                     let opts: Vec<(String, &str)> = options.iter().cloned().zip(labels.iter().map(String::as_str)).collect();
                     crate::widgets::dropdown(ui, &format!("flt-{cmd}-{}", p.key), &mut cur, &opts, 170.0);
@@ -622,6 +673,9 @@ pub fn preview_document_with(
     k: u32,
     cancel: Option<&photocraft_engine::jobs::JobCtx>,
 ) -> Option<Document> {
+    if command == crate::select_mask_view::COMMAND {
+        return crate::select_mask_view::preview_document(doc, active, params, k, cancel);
+    }
     // Warp Text renders the type again from the layer model (font size, position), which a
     // reduced proxy doesn't scale: it runs at full size and the result is reduced (#218).
     let (run_k, reduce_k) = if command == "type.warpText" { (1, k) } else { (k, 1) };
@@ -721,11 +775,13 @@ mod tests {
     fn parses_registry_notation() {
         let p = parse_spec(r#"{"radius":0.1..1000=1,"method":"spin|zoom","monochromatic":bool,"seed":u32=0,"horizontal":px=0}"#);
         assert_eq!(p[0], Param { key: "radius".into(), kind: Kind::Range { min: 0.1, max: 1000.0, default: 1.0 } });
-        assert_eq!(p[1].kind, Kind::Choice(vec!["spin".into(), "zoom".into()]));
+        assert_eq!(p[1].kind, Kind::Choice { options: vec!["spin".into(), "zoom".into()], default: None });
         assert_eq!(p[2].kind, Kind::Bool(false));
         assert_eq!(p[3].kind, Kind::Int { default: 0 });
         assert_eq!(p[4].kind, Kind::Int { default: 0 });
         assert!(parse_spec("{}").is_empty());
+        let p_choice = parse_spec(r#"{"quality":"draft|good|best"="good"}"#);
+        assert_eq!(p_choice[0].kind, Kind::Choice { options: vec!["draft".into(), "good".into(), "best".into()], default: Some("good".into()) });
         let p = parse_spec(r#"{"lighting":bool=true,"kernel":int[25],"pins":json,"points":[[0,0],[1,0]],"mapPath":text,"mapDocument":doc,"scale":1..9999=1}"#);
         let kinds: Vec<&Kind> = p.iter().map(|p| &p.kind).collect();
         assert_eq!(
@@ -742,6 +798,182 @@ mod tests {
         f.insert("__command".into(), json!("edit.autoAlignLayers"));
         egui::Context::default().run_ui(Default::default(), |ui| body(ui, &mut f)).textures_delta.clear();
         assert!(!params_of(&f).as_object().unwrap().contains_key("reference"), "{f:?}");
+    }
+
+    /// Layer › Layer Style › Global Light (#3054): Global Light dialog opens with the active
+    /// document's current shared lighting, preserving it on unchanged OK, ignoring stale
+    /// remembered dialog values, tracking document switching, applying edits, and leaving the
+    /// document unchanged on Cancel.
+    #[test]
+    fn global_light_dialog_reflects_active_document_light() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        let doc1_id = app.session.active().unwrap().doc.id;
+
+        // 0. Default-document control: fresh document starts at angle 120 and altitude 30.
+        let d_default = crate::menus::invoke(&mut app, &ctx, "layer.layerStyle.globalLight", Value::Null).unwrap()["dialog"].as_u64().unwrap();
+        assert_eq!(app.ui.dialog_mut(d_default).unwrap().fields["angle"], json!(120.0));
+        assert_eq!(app.ui.dialog_mut(d_default).unwrap().fields["altitude"], json!(30.0));
+        crate::dialogs::confirm(&mut app, d_default).unwrap();
+        assert_eq!(app.session.active().unwrap().doc.global_light.angle, 120.0);
+        assert_eq!(app.session.active().unwrap().doc.global_light.altitude, 30.0);
+
+        // 1. Change document's global light to 30 degrees angle and 45 degrees altitude.
+        app.run("layer.layerStyle.globalLight", json!({"angle": 30.0, "altitude": 45.0})).unwrap();
+        assert_eq!(app.session.active().unwrap().doc.global_light.angle, 30.0);
+        assert_eq!(app.session.active().unwrap().doc.global_light.altitude, 45.0);
+
+        // 2. Open Global Light dialog: opens with the active document's light (30 / 45).
+        let d_id = crate::menus::invoke(&mut app, &ctx, "layer.layerStyle.globalLight", Value::Null).unwrap()["dialog"].as_u64().unwrap();
+        let fields = &app.ui.dialog_mut(d_id).unwrap().fields;
+        assert_eq!(fields["angle"], json!(30.0));
+        assert_eq!(fields["altitude"], json!(45.0));
+
+        // 3. Unchanged OK preserves the document's light.
+        crate::dialogs::confirm(&mut app, d_id).unwrap();
+        let gl = app.session.active().unwrap().doc.global_light;
+        assert_eq!(gl.angle, 30.0);
+        assert_eq!(gl.altitude, 45.0);
+
+        // 4. Stale remembered values do not override the active document.
+        app.session.prefs.edit(|prefs| {
+            prefs.dialogs.insert(
+                "layer.layerStyle.globalLight".into(),
+                json!({
+                    "angle": 75.0,
+                    "altitude": 60.0,
+                }),
+            );
+        });
+        let d_id = open(&mut app, "layer.layerStyle.globalLight").unwrap();
+        let fields = &app.ui.dialog_mut(d_id).unwrap().fields;
+        assert_eq!(fields["angle"], json!(30.0), "reads active document, not remembered");
+        assert_eq!(fields["altitude"], json!(45.0));
+
+        // 5. Cancel preserves the document's light.
+        app.ui.close_dialog(d_id);
+        let gl = app.session.active().unwrap().doc.global_light;
+        assert_eq!(gl.angle, 30.0);
+        assert_eq!(gl.altitude, 45.0);
+
+        // 6. Multiple documents: each document initializes the dialog to its own light.
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        let doc2_id = app.session.active().unwrap().doc.id;
+        assert_ne!(doc1_id, doc2_id);
+        app.run("layer.layerStyle.globalLight", json!({"angle": -45.0, "altitude": 15.0})).unwrap();
+        assert_eq!(app.session.active().unwrap().doc.global_light.angle, -45.0);
+        assert_eq!(app.session.active().unwrap().doc.global_light.altitude, 15.0);
+
+        let d_id2 = open(&mut app, "layer.layerStyle.globalLight").unwrap();
+        let fields2 = &app.ui.dialog_mut(d_id2).unwrap().fields;
+        assert_eq!(fields2["angle"], json!(-45.0));
+        assert_eq!(fields2["altitude"], json!(15.0));
+        app.ui.close_dialog(d_id2);
+
+        // Switch back to doc1: dialog still reflects doc1's light (30 / 45).
+        assert!(app.session.set_active(0));
+        let d_id1 = open(&mut app, "layer.layerStyle.globalLight").unwrap();
+        assert_eq!(app.ui.dialog_mut(d_id1).unwrap().fields["angle"], json!(30.0));
+        assert_eq!(app.ui.dialog_mut(d_id1).unwrap().fields["altitude"], json!(45.0));
+
+        // 7. Modifying the dialog updates the active document.
+        app.ui.dialog_mut(d_id1).unwrap().fields.insert("angle".into(), json!(-60.0));
+        app.ui.dialog_mut(d_id1).unwrap().fields.insert("altitude".into(), json!(20.0));
+        crate::dialogs::confirm(&mut app, d_id1).unwrap();
+        assert_eq!(app.session.active().unwrap().doc.global_light.angle, -60.0);
+        assert_eq!(app.session.active().unwrap().doc.global_light.altitude, 20.0);
+
+        // Switch to doc2: doc2 is untouched (-45 / 15).
+        assert!(app.session.set_active(1));
+        assert_eq!(app.session.active().unwrap().doc.global_light.angle, -45.0);
+        assert_eq!(app.session.active().unwrap().doc.global_light.altitude, 15.0);
+    }
+
+    /// View › Proof Setup (#3055): Custom Proof Setup opens with the active document's current
+    /// proof condition, preserving it on unchanged OK, ignoring stale remembered dialog values,
+    /// tracking document switching, applying edits, and leaving the document unchanged on Cancel.
+    #[test]
+    fn proof_setup_dialog_reflects_active_document_proof_condition() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        let doc1_id = app.session.active().unwrap().doc.id;
+
+        // 0. A fresh document defaults to working-cmyk.
+        let d_fresh = crate::menus::invoke(&mut app, &ctx, "view.proofSetup.custom", Value::Null).unwrap()["dialog"].as_u64().unwrap();
+        assert_eq!(app.ui.dialog_mut(d_fresh).unwrap().fields["profile"], json!("working-cmyk"));
+        crate::dialogs::confirm(&mut app, d_fresh).unwrap();
+        assert_eq!(app.session.color.proof(doc1_id).setup.name, "working-cmyk");
+
+        // 1. Preset sets sRGB and turns Proof Colors on.
+        crate::menus::invoke(&mut app, &ctx, "view.proofSetup.internetStandardRgb", Value::Null).unwrap();
+        assert_eq!(app.session.color.proof(doc1_id).setup.name, "srgb");
+        assert!(app.session.color.proof(doc1_id).enabled);
+
+        // 2. Open Custom Proof Setup: starts with the active document's condition (sRGB).
+        let d_id = crate::menus::invoke(&mut app, &ctx, "view.proofSetup.custom", Value::Null).unwrap()["dialog"].as_u64().unwrap();
+        let fields = &app.ui.dialog_mut(d_id).unwrap().fields;
+        assert_eq!(fields["profile"], json!("srgb"));
+        assert_eq!(fields["intent"], json!("relative"));
+        assert_eq!(fields["bpc"], json!(true));
+        assert_eq!(fields["simulatePaper"], json!(false));
+
+        // 3. Unchanged OK preserves the document's condition and leaves Proof Colors enabled.
+        crate::dialogs::confirm(&mut app, d_id).unwrap();
+        let pv = app.session.color.proof(doc1_id);
+        assert_eq!(pv.setup.name, "srgb");
+        assert!(pv.enabled);
+
+        // 4. Stale remembered values do not override the active document.
+        app.session.prefs.edit(|prefs| {
+            prefs.dialogs.insert(
+                "view.proofSetup".into(),
+                json!({
+                    "profile": "display-p3",
+                    "intent": "perceptual",
+                    "bpc": false,
+                    "simulatePaper": true,
+                }),
+            );
+        });
+        let d_id = open(&mut app, "view.proofSetup").unwrap();
+        let fields = &app.ui.dialog_mut(d_id).unwrap().fields;
+        assert_eq!(fields["profile"], json!("srgb"), "reads active document, not remembered");
+        assert_eq!(fields["intent"], json!("relative"));
+        assert_eq!(fields["bpc"], json!(true));
+        assert_eq!(fields["simulatePaper"], json!(false));
+
+        // 5. Cancel preserves the document.
+        app.ui.close_dialog(d_id);
+        assert_eq!(app.session.color.proof(doc1_id).setup.name, "srgb");
+
+        // 6. Multiple documents: each document initializes the dialog to its own condition.
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        let doc2_id = app.session.active().unwrap().doc.id;
+        assert_ne!(doc1_id, doc2_id);
+        app.run("view.proofSetup", json!({"profile": "display-p3", "intent": "perceptual", "bpc": false, "simulatePaper": true})).unwrap();
+        assert_eq!(app.session.color.proof(doc2_id).setup.name, "display-p3");
+
+        let d_id2 = open(&mut app, "view.proofSetup").unwrap();
+        let fields2 = &app.ui.dialog_mut(d_id2).unwrap().fields;
+        assert_eq!(fields2["profile"], json!("display-p3"));
+        assert_eq!(fields2["intent"], json!("perceptual"));
+        assert_eq!(fields2["bpc"], json!(false));
+        assert_eq!(fields2["simulatePaper"], json!(true));
+        app.ui.close_dialog(d_id2);
+
+        // Switch back to doc1: dialog still reflects doc1's sRGB.
+        assert!(app.session.set_active(0));
+        let d_id1 = open(&mut app, "view.proofSetup").unwrap();
+        assert_eq!(app.ui.dialog_mut(d_id1).unwrap().fields["profile"], json!("srgb"));
+
+        // 7. Modifying the dialog updates the active document.
+        app.ui.dialog_mut(d_id1).unwrap().fields.insert("profile".into(), json!("adobe-rgb-compat"));
+        crate::dialogs::confirm(&mut app, d_id1).unwrap();
+        assert_eq!(app.session.color.proof(doc1_id).setup.name, "adobe-rgb-compat");
+        // doc2 is untouched
+        assert_eq!(app.session.color.proof(doc2_id).setup.name, "display-p3");
     }
 
     #[test]
@@ -815,12 +1047,12 @@ mod tests {
                     continue;
                 }
                 check(source_label(&p.key));
-                if let Kind::Choice(choices) = p.kind {
-                    for choice in choices {
+                if let Kind::Choice { options, .. } = &p.kind {
+                    for choice in options {
                         // Only symbolic options are UI choices; registry docs also contain
                         // colour syntax and array notation, which are not translatable names.
                         if choice.chars().all(|c| c.is_ascii_alphanumeric()) {
-                            check(source_label(&choice));
+                            check(source_label(choice));
                         }
                     }
                 }
@@ -1453,5 +1685,47 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn schema_dialogs_respect_explicit_dropdown_defaults() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+
+        // 1. Radial Blur has explicit default "good", not the first option ("draft").
+        open(&mut app, "filter.blur.radialBlur").unwrap();
+        let fields = &app.ui.dialogs.last().unwrap().fields;
+        assert_eq!(fields["quality"], json!("good"), "Radial Blur must select explicit default 'good'");
+        assert_eq!(fields["method"], json!("spin"), "Radial Blur method has no explicit default, retains first option");
+        let params = params_of(fields);
+        assert_eq!(params["quality"], json!("good"));
+
+        // 2. Convert to Profile has explicit default "relative", not first option ("perceptual").
+        open(&mut app, "edit.convertToProfile").unwrap();
+        let fields = &app.ui.dialogs.last().unwrap().fields;
+        assert_eq!(fields["intent"], json!("relative"), "Convert to Profile must select explicit default 'relative'");
+        let params = params_of(fields);
+        assert_eq!(params["intent"], json!("relative"));
+
+        // 3. Proof Setup has explicit default "relative".
+        open(&mut app, "view.proofSetup").unwrap();
+        let fields = &app.ui.dialogs.last().unwrap().fields;
+        assert_eq!(fields["intent"], json!("relative"), "Proof Setup must select explicit default 'relative'");
+        let params = params_of(fields);
+        assert_eq!(params["intent"], json!("relative"));
+
+        // 4. Remembered values still override initial defaults.
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.session.prefs.edit(|prefs| {
+            prefs.dialogs.insert("filter.blur.radialBlur".into(), json!({"quality": "best"}));
+        });
+        open(&mut app, "filter.blur.radialBlur").unwrap();
+        let fields = &app.ui.dialogs.last().unwrap().fields;
+        assert_eq!(fields["quality"], json!("best"), "Remembered choice must override explicit default");
+
+        // 5. Explicit default that is the first option (e.g. "cw" in arbitrary rotation).
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        open(&mut app, "image.rotation.arbitrary").unwrap();
+        let fields = &app.ui.dialogs.last().unwrap().fields;
+        assert_eq!(fields["direction"], json!("cw"), "Explicit default matching first option is preserved");
     }
 }

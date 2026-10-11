@@ -367,8 +367,8 @@ fn clear_artboard_guides(s: &mut Session) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let id = active_artboard(s).ok_or(EngineError::Other("no artboard selected".into()))?;
     let r = d.doc.layer(id).and_then(Layer::artboard).map(|a| a.rect).ok_or(EngineError::NoLayer(id))?;
-    let inside_x = |x: &f32| f64::from(*x) > f64::from(r.x0) && f64::from(*x) < f64::from(r.x1);
-    let inside_y = |y: &f32| f64::from(*y) > f64::from(r.y0) && f64::from(*y) < f64::from(r.y1);
+    let inside_x = |x: &f64| *x > f64::from(r.x0) && *x < f64::from(r.x1);
+    let inside_y = |y: &f64| *y > f64::from(r.y0) && *y < f64::from(r.y1);
     let n = d.doc.guides.vertical.iter().filter(|x| inside_x(x)).count() + d.doc.guides.horizontal.iter().filter(|y| inside_y(y)).count();
     if n == 0 {
         return Ok(json!({"cleared": 0}));
@@ -405,7 +405,7 @@ pub fn artboard_document(doc: &Document, id: LayerId) -> Result<Option<Document>
     one.layer_comps.clear();
     one.last_applied_comp = None;
     one.last_document_state = None;
-    let shift = |v: &[f32], o: i32, len: u32| v.iter().map(|g| g - o as f32).filter(|g| *g > 0.0 && *g < len as f32).collect::<Vec<_>>();
+    let shift = |v: &[f64], o: i32, len: u32| v.iter().map(|g| g - f64::from(o)).filter(|g| *g > 0.0 && *g < f64::from(len)).collect::<Vec<_>>();
     one.guides.vertical = shift(&doc.guides.vertical, r.x0, r.width());
     one.guides.horizontal = shift(&doc.guides.horizontal, r.y0, r.height());
     Ok(Some(one))
@@ -434,6 +434,7 @@ fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.artboardsToFiles";
     let dir = str_param(p, "dir", cmd).or_else(|_| str_param(p, "output", cmd))?.to_string();
     let format = p.get("format").and_then(Value::as_str).unwrap_or("png").trim_start_matches('.').to_ascii_lowercase();
+    let save = SaveOpts::from_params(p, cmd)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let prefix = p.get("prefix").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&d.doc.name));
     let doc = d.doc.clone();
@@ -441,7 +442,7 @@ fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     for one in chosen_documents(&doc, p)? {
         let name = if prefix.is_empty() { sanitize(&one.name) } else { format!("{}_{}", sanitize(&prefix), sanitize(&one.name)) };
         let path = join(&dir, &format!("{name}.{format}"));
-        save_doc(&one, &path, SaveOpts::from_params(p))?;
+        save_doc(&one, &path, save)?;
         files.push(path);
     }
     if files.is_empty() {

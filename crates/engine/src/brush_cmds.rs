@@ -9,7 +9,7 @@
 use photocraft_doc::LayerContent;
 use photocraft_geom::Rect;
 use photocraft_paint::mixer::{MixerSettings, apply_mixer_stroke};
-use photocraft_paint::replace::{Limits, ReplaceMode, ReplaceSettings, Sampling, apply_color_replacement};
+use photocraft_paint::replace::{Limits, ReplaceMode, ReplaceSettings, Sampling, apply_color_replacement, color_replacement_effect};
 use photocraft_paint::{BrushPreset, BrushSettings, GrayTile, Stroke, StrokePoint, StrokeRenderer, TipShape, render_stroke};
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
@@ -253,14 +253,23 @@ fn doc_cmyk_space(s: &Session) -> Option<std::sync::Arc<photocraft_color::conver
 }
 
 /// Stroke with a resolved brush onto the target layer (pixels or mask).
-fn stroke_with(s: &mut Session, p: &Value, label: &str, brush: BrushSettings, pts: Vec<StrokePoint>, auto_erase: bool) -> Result<Value> {
+fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushSettings, pts: Vec<StrokePoint>, auto_erase: bool) -> Result<Value> {
     let bg = s.tools.background;
     let fg = brush.color;
     let symmetry = s.active().and_then(|st| st.symmetry.clone());
     let (id, brush, zoom) = stroke_target(s, p, brush)?;
     let cmyk = doc_cmyk_space(s);
+    // The live stroke the canvas already rendered for exactly these params: take its pixels
+    // instead of rendering the whole stroke again (the hitch at pen-up).
+    let live = s.live_commit.take().filter(|l| l.matches(s, cmd, p, &pts));
+    let from_live = live.is_some();
     let dmg = photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
         s.edit(label, |doc, _| {
+            if let Some(l) = live {
+                let (surf, _) = crate::channel_cmds::target_surface(doc, id, p)?;
+                *surf = l.surface;
+                return Ok(l.bounds);
+            }
             let sel = doc.selection.clone();
             let (surf, lock) = crate::channel_cmds::target_surface(doc, id, p)?;
             let mut brush = brush;
@@ -295,7 +304,11 @@ fn stroke_with(s: &mut Session, p: &Value, label: &str, brush: BrushSettings, pt
             Ok(damage)
         })
     })?;
-    Ok(damage_json(s, dmg))
+    let mut r = damage_json(s, dmg);
+    if from_live {
+        r["fromLive"] = json!(true);
+    }
+    Ok(r)
 }
 
 /// Pencil Auto Erase: a stroke that starts on a pixel of the foreground colour paints the
@@ -377,7 +390,7 @@ pub fn paint_stroke(s: &mut Session, p: &Value) -> Result<Value> {
     let pts = parse_points(p, "paint.stroke")?;
     let brush = with_blend_mode(resolve_brush(s, p, "paint.stroke")?, p);
     let label = if brush.erase { "Eraser" } else { "Brush Tool" };
-    stroke_with(s, p, label, brush, pts, false)
+    stroke_with(s, "paint.stroke", p, label, brush, pts, false)
 }
 
 /// A `paint.stroke` rendered while it is drawn, onto a copy of the active document, so the canvas
@@ -405,6 +418,44 @@ pub struct LiveStroke {
     /// The document's CMYK profile the commit enters (`stroke_with`), so the preview shows the
     /// pixels a `paint.stroke` with `seed` will write.
     cmyk: Option<std::sync::Arc<photocraft_color::convert::CmykSpace>>,
+    /// Every point rendered so far, in order.
+    points: Vec<StrokePoint>,
+    /// The document and revision the stroke started on.
+    base: (photocraft_doc::DocId, u64),
+}
+
+/// A finished live stroke offered to its own commit ([`Session::offer_live_stroke`]): when the
+/// committing `paint.stroke` / `paint.pencil` matches it (same command, document revision, params,
+/// seed and points), the command takes these pixels instead of rendering the stroke again.
+pub struct LiveCommit {
+    cmd: String,
+    base: (photocraft_doc::DocId, u64),
+    params: Value,
+    seed: u64,
+    points: Vec<StrokePoint>,
+    surface: Surface,
+    bounds: Rect,
+}
+
+impl LiveCommit {
+    /// The params that decide the pixels, without the points and seed (compared separately).
+    fn settings(p: &Value) -> Value {
+        let mut p = p.clone();
+        if let Some(o) = p.as_object_mut() {
+            o.remove("points");
+            o.remove("seed");
+        }
+        p
+    }
+
+    fn matches(&self, s: &Session, cmd: &str, p: &Value, pts: &[StrokePoint]) -> bool {
+        let base = s.active().map(|st| (st.doc.id, st.revision));
+        self.cmd == cmd
+            && base == Some(self.base)
+            && p.get("seed").and_then(Value::as_u64) == Some(self.seed)
+            && self.points == pts
+            && Self::settings(p) == Self::settings(&self.params)
+    }
 }
 
 impl LiveStroke {
@@ -426,7 +477,9 @@ impl LiveStroke {
         let brush = if pencil { pencil_brush(s, p)? } else { with_blend_mode(resolve_brush(s, p, cmd)?, p) };
         let (seed, fg) = (brush.seed, brush.color);
         let (layer, mut brush, zoom) = stroke_target(s, p, brush)?;
-        let mut doc = (*s.active().ok_or(EngineError::NoDocument)?.doc).clone();
+        let st = s.active().ok_or(EngineError::NoDocument)?;
+        let base = (st.doc.id, st.revision);
+        let mut doc = (*st.doc).clone();
         let sel = doc.selection.clone();
         let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, layer, p)?;
         erase_locked(&mut brush, lock, s.tools.background);
@@ -454,9 +507,18 @@ impl LiveStroke {
             params: p.clone(),
             tail: Rect::EMPTY,
             cmyk: doc_cmyk_space(s),
+            points: Vec::new(),
+            base,
         };
         live.push(&pts)?;
         Ok(live)
+    }
+
+    /// The stroke as its commit would take it over (see [`LiveCommit`]).
+    pub fn into_commit(mut self) -> Result<LiveCommit> {
+        let bounds = self.bounds();
+        let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.layer, &self.params)?;
+        Ok(LiveCommit { cmd: self.cmd, base: self.base, params: self.params, seed: self.seed, points: self.points, surface: surf.clone(), bounds })
     }
 
     /// Everything the stroke has touched so far.
@@ -478,6 +540,7 @@ impl LiveStroke {
     /// Invalid coordinates reject the whole batch without changing the preview.
     pub fn push(&mut self, pts: &[StrokePoint]) -> Result<Rect> {
         check_coords(pts, &self.cmd)?;
+        self.points.extend_from_slice(pts);
         let cmyk = self.cmyk.clone();
         photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
             self.renderer.push(pts);
@@ -539,7 +602,7 @@ fn pencil(s: &mut Session, p: &Value) -> Result<Value> {
     let pts = parse_points(p, "paint.pencil")?;
     let brush = pencil_brush(s, p)?;
     let label = if brush.erase { "Eraser" } else { "Pencil" };
-    stroke_with(s, p, label, brush, pts, flag(p, "autoErase", false))
+    stroke_with(s, "paint.pencil", p, label, brush, pts, flag(p, "autoErase", false))
 }
 
 fn pct(p: &Value, k: &str, d: f32) -> f32 {
@@ -593,8 +656,14 @@ fn mixer_brush(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(damage_json(s, dmg))
 }
 
-fn color_replacement(s: &mut Session, p: &Value) -> Result<Value> {
+/// `paint.colorReplacement`'s stroke and settings. The replacement colour is the brush colour
+/// (the foreground unless `color` says otherwise). It paints layer pixels only: a mask, alpha
+/// channel or Quick Mask `target` is refused rather than recolouring the layer instead.
+fn color_replacement_setup(s: &Session, p: &Value) -> Result<(Stroke, ReplaceSettings, photocraft_doc::LayerId)> {
     let cmd = "paint.colorReplacement";
+    if let Some(t) = p.get("target").filter(|t| t.as_str() != Some("pixels")) {
+        return Err(bad(cmd, format!("Color Replacement paints layer pixels only (`target` {t} is not \"pixels\")")));
+    }
     let pts = parse_points(p, cmd)?;
     let brush = resolve_brush(s, p, cmd)?;
     fn parse<T: serde::de::DeserializeOwned>(p: &Value, cmd: &str, k: &str) -> Result<Option<T>> {
@@ -610,7 +679,11 @@ fn color_replacement(s: &mut Session, p: &Value) -> Result<Value> {
         background: s.tools.background,
     };
     let id = layer_id(s, p)?;
-    let stroke = Stroke { brush, points: pts };
+    Ok((Stroke { brush, points: pts }, rs, id))
+}
+
+fn color_replacement(s: &mut Session, p: &Value) -> Result<Value> {
+    let (stroke, rs, id) = color_replacement_setup(s, p)?;
     let dmg = s.edit("Color Replacement", |doc, _| {
         let sel = doc.selection.clone();
         let lock = doc.effective_locks(id).transparency;
@@ -618,6 +691,16 @@ fn color_replacement(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(apply_color_replacement(surf, &stroke, &rs, sel.as_ref(), lock))
     })?;
     Ok(damage_json(s, dmg))
+}
+
+/// A `paint.colorReplacement` stroke shown while it is drawn: the same params, and the same
+/// recolouring per dab as the commit, so the preview at the last point is the committed result.
+pub fn live_color_replacement(s: &Session, p: &Value) -> Result<crate::retouch_cmds::LiveDab> {
+    let (stroke, rs, id) = color_replacement_setup(s, p)?;
+    crate::retouch_cmds::LiveDab::with_effect(s, "paint.colorReplacement", &json!({}), stroke, Some(id), 0, |pre| {
+        Box::new(color_replacement_effect(pre.clone(), rs))
+    })?
+    .with_tail_preview()
 }
 
 fn brush_json(b: &BrushSettings) -> Value {
@@ -937,7 +1020,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "paint.colorReplacement",
             "Color Replacement",
-            r##"{"points":[…],"brush":{…}?,"size":px?,"mode":"hue|saturation|color|luminosity"="color","sampling":"continuous|once|backgroundSwatch"="continuous","limits":"contiguous|discontiguous|findEdges"="contiguous","tolerance":0..100=30,"antiAlias":bool=true,"color":"#rrggbb"?=foreground,"seed":u64?}"##,
+            r##"{"points":[…],"brush":{…}?,"size":px?,"mode":"hue|saturation|color|luminosity"="color","sampling":"continuous|once|backgroundSwatch"="continuous","limits":"contiguous|discontiguous|findEdges"="contiguous","tolerance":0..100=30,"antiAlias":bool=true,"color":"#rrggbb"?=foreground,"target":"pixels"="pixels","seed":u64?}"##,
             crate::commands::has_paintable,
             color_replacement,
             true

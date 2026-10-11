@@ -18,6 +18,25 @@
 # the Russian typographic equivalent, with the space the source carries.
 
 # Menus
+
+# Guide layout dialog
+	Rows	Строки
+	Number	Количество
+	Margin	Поля
+	Top:	Сверху:
+	Left:	Слева:
+	Bottom:	Снизу:
+	Right:	Справа:
+	Target:	Цель:
+	Selected Artboards	Выбранные монтажные области
+	Center Columns	Центрировать столбцы
+	Clear Existing Guides	Удалить существующие направляющие
+	Invalid guide layout	Недопустимый макет направляющих
+	Leave empty for automatic size	Оставьте пустым для автоматического размера
+	5 Columns, 3 Rows	5 столбцов, 3 строки
+	8 Columns	8 столбцов
+	12 Columns	12 столбцов
+
 	File	Файл
 	Edit	Редактирование
 	Image	Изображение
@@ -515,6 +534,7 @@
 	Magnetic Lasso	Магнитное лассо
 	Mixer Brush	Смешивающая кисть
 	Mixer Brush Tool	Инструмент «Смешивающая кисть»
+	Color Replacement Tool	Инструмент «Замена цвета»
 	History Brush	Кисть истории
 	Art History Brush	Кисть истории искусств
 	Pattern Stamp	Узорный штамп
@@ -1405,6 +1425,8 @@
 	Adwaita Dark Theme	Тёмная тема Adwaita
 	Pro Theme	Тема Pro
 	Pro Medium Gray Theme	Средне-серая тема Pro
+	Pro Light Gray Theme	Светло-серая тема Pro
+	Pro Light Theme	Светлая тема Pro
 
 # Workspaces
 	Workspace…	Рабочая среда…
@@ -1412,6 +1434,9 @@
 	New Workspace…	Новая рабочая среда…
 	Delete Workspace…	Удалить рабочую среду…
 	Reset Workspace	Сбросить рабочую среду
+	Reset Tool	Сбросить инструмент
+	Reset All Tools	Сбросить все инструменты
+	Reset all tools to their default settings?	Сбросить все инструменты к настройкам по умолчанию?
 	Lock Workspace	Заблокировать рабочую среду
 	Photography	Фотография
 	Graphic and web	Графика и web
@@ -1546,6 +1571,8 @@
 	Gradient Tool	Градиент
 	Paint Bucket Tool	Заливка
 	Horizontal Type Tool	Горизонтальный текст
+	Horizontal Type Mask Tool	Горизонтальный текст-маска
+	Vertical Type Mask Tool	Вертикальный текст-маска
 	Hand Tool	Рука
 	Zoom Tool	Масштаб
 	Spot Healing Brush Tool	Точечная восстанавливающая кисть
@@ -1561,8 +1588,13 @@
 	Quick Selection Tool	Быстрое выделение
 	Object Selection Tool	Выделение объектов
 	Pen Tool	Перо
+	Convert Point Tool	Преобразование узла
 	Path Selection Tool	Выделение контура
 	Direct Selection Tool	Выделение узла
+	Add Anchor Point Tool	Добавить узел
+	Delete Anchor Point Tool	Удалить узел
+	Click a segment to add an anchor point · {alt}-click an anchor to delete it	Щёлкните сегмент, чтобы добавить узел · {alt}-щелчок по узлу удаляет его
+	Click an anchor point to delete it · {alt}-click a segment to add one	Щёлкните узел, чтобы удалить его · {alt}-щелчок по сегменту добавляет узел
 	Rectangle Tool	Прямоугольник
 	Ellipse Tool	Овал
 	Triangle Tool	Треугольник
@@ -1947,6 +1979,9 @@
 	Baseline	Базовая линия
 	Bicubic	Бикубическая
 	Bicubic (smooth gradients)	Бикубическая (плавные градиенты)
+	Automatic	Автоматически
+	Bicubic Smoother (enlargement)	Бикубическая, глаже (увеличение)
+	Bicubic Sharper (reduction)	Бикубическая, чётче (уменьшение)
 	Bilinear	Билинейная
 	Black, White	Чёрный, белый
 	Blue, Red, Yellow	Синий, красный, жёлтый
@@ -2205,6 +2240,7 @@
 	Cache tile size	Размер блока кэша
 	Camera Raw Defaults	Значения Camera Raw по умолчанию
 	Canvas border	Рамка холста
+	Show canvas dots	Показывать точки холста
 	Canvas color	Цвет холста
 	Canvas custom color	Свой цвет холста
 	Classic	Классическая
@@ -2300,6 +2336,8 @@
 	Preserve details	Сохранять детали
 	Print resolution	Разрешение при печати
 	Pro	Pro
+	Pro light	Светлая Pro
+	Pro light gray	Светло-серая Pro
 	Pro medium	Средняя Pro
 	Pro photo	ProPhoto
 	Purple	Фиолетовая
@@ -2375,7 +2413,9 @@
 	Developing {name}	Обработка {name}
 	Cancelled {label}	{label}: отменено
 	Esc to cancel	Esc — отмена
+	Opened {name}	Открыто: {name}
 	Opening {name}	Открытие {name}
+	Saved {name}	Сохранено: {name}
 	Saving {name}	Сохранение {name}
 	A save to {name} is still running; try again when it finishes	Сохранение в {name} ещё выполняется; повторите попытку после его завершения
 	{label} is writing the file and can no longer be cancelled	{label}: идёт запись файла, отменить уже нельзя
@@ -2460,6 +2500,9 @@ cameraRaw	Roughness	Неровность
 	Structure:	Структура:
 	Content-Aware Move Tool	Перемещение с учётом содержимого
 	TIFF Options	Параметры TIFF
+	Targa Options	Параметры Targa
+	24 bits/pixel	24 бит/пиксел
+	32 bits/pixel	32 бит/пиксел
 	Including layers will increase file size.	Включение слоёв увеличит размер файла.
 	Discard Layers and Save a Copy	Удалить слои и сохранить копию
 	Don't show again	Больше не показывать
@@ -2548,6 +2591,21 @@ cameraRaw	Roughness	Неровность
 	Domed	Купол
 	Domed (Inverted)	Купол (инвертированный)
 	Diagonal (Descending)	Диагональ (нисходящая)
+	Contour Editor	Редактор контура
+	Anti-aliased	Сглаживание
+	Corner	Угол
+	Gloss Contour	Контур глянца
+	Contour	Контур
+	Cone - Inverted	Конус - инвертированный
+	Cove - Deep	Бухта - глубокая
+	Cove - Shallow	Бухта - мелкая
+	Gaussian	Гауссова
+	Half Round	Полукруг
+	Ring	Кольцо
+	Ring - Double	Кольцо - двойное
+	Rolling Slope - Descending	Волнистый склон - нисходящий
+	Rounded Steps	Скруглённые ступени
+	Sawtooth 1	Пила 1
 	Linear	Линейный
 
 	Red Eye Tool	Инструмент «Красные глаза»
@@ -2715,13 +2773,125 @@ fontWeight	Italic	Курсив
 	Missing delete command	Отсутствует команда удаления
 	Invalid delete command	Недопустимая команда удаления
 	Layer deleted, but confirmation preference could not be saved: {error}	Слой удалён, но не удалось сохранить настройку подтверждения: {error}
+	Add a layer style	Добавить стиль слоя
+	Add a mask  (from the selection; {key} inverts)	Добавить маску  (из выделения; {key} инвертирует)
+	Add an adjustment	Добавить коррекцию
+	Add to selection  ({key})	Добавить к выделению  ({key})
+	Adjustment visible	Коррекция видима
+	Align and distribute	Выровнять и распределить
+	Align horizontal centers	Выровнять центры по горизонтали
+	Align left edges	Выровнять по левому краю
+	Align right edges	Выровнять по правому краю
+	Always use pressure for opacity	Всегда использовать нажим для непрозрачности
+	Always use pressure for size	Всегда использовать нажим для размера
+	Angle Gradient	Угловой градиент
+	Auto-Select:	Автовыбор:
+	Brush Preset picker	Выбор набора кистей
+	Cancel current crop operation  (Esc)	Отменить текущее кадрирование  (Esc)
+	Click the first point or press {key} to close · Esc cancels	Щёлкните первую точку или нажмите {key}, чтобы замкнуть · Esc отменяет
+	Click the first point or press {key} to close · {del} removes a point · Esc cancels	Щёлкните первую точку или нажмите {key}, чтобы замкнуть · {del} удаляет точку · Esc отменяет
+	Click, then move along an edge · click to fasten a point · {alt}-click for a straight segment · double-click to close	Щёлкните и ведите вдоль края · щелчок закрепляет точку · {alt}-щелчок — прямой отрезок · двойной щелчок замыкает
+	Clip to layer below	Обтравить по нижнему слою
+	Color & Swatches	Цвет и образцы
+	Commit current crop operation  ({key})	Принять текущее кадрирование  ({key})
+	Create a new group	Создать новую группу
+	Create a new layer	Создать новый слой
+	Create new document from current state	Создать новый документ из текущего состояния
+	Create new fill or adjustment layer	Создать новый слой-заливку или корректирующий слой
+	Create new snapshot	Создать новый снимок
+	Delete Cropped Pixels	Удалить отсечённые пикселы
+	Delete current state	Удалить текущее состояние
+	Delete layer	Удалить слой
+	Diamond Gradient	Ромбовидный градиент
+	Doc: {w} × {h} px	Док: {w} × {h} px
+	Enable airbrush-style build-up effects	Включить эффекты наслоения в стиле аэрографа
+	Filter for adjustment layers	Фильтр корректирующих слоёв
+	Filter for pixel layers	Фильтр пиксельных слоёв
+	Filter for shape layers	Фильтр слоёв-фигур
+	Filter for smart objects	Фильтр смарт-объектов
+	Filter for type layers	Фильтр текстовых слоёв
+	Fixed Ratio	Заданные пропорции
+	Fixed Size	Заданный размер
+	Follows only edges this close to the pointer ([ and ] change it)	Следует только за краями на таком расстоянии от указателя ([ и ] меняют его)
+	Hide Properties	Скрыть свойства
+	Higher values follow only edges that contrast sharply with their surroundings	Чем выше значение, тем только более контрастные края учитываются
+	How often fastening points are placed by themselves	Как часто точки привязки ставятся автоматически
+	Hue/Saturation	Цветовой тон/Насыщенность
+	Intersect with selection  ({key})	Пересечь с выделением  ({key})
+	Kind	Вид
+	Linear Gradient	Линейный градиент
+	Link layers	Связать слои
+	Lock	Закрепить
+	Lock all	Закрепить все
+	Lock image pixels	Сохранить цвета пикселов
+	Lock layer	Закрепить слой
+	Lock position	Закрепить положение
+	Lock transparent pixels	Сохранить прозрачность пикселов
+	New selection	Новое выделение
+	No properties	Нет свойств
+	Pressure for Opacity	Нажим для непрозрачности
+	Pressure for Size	Нажим для размера
+	Prevent auto-nesting in and out of Artboards and Frames	Запретить автоматическое вложение в монтажные области и кадры и извлечение из них
+	Radial Gradient	Радиальный градиент
+	Reflected Gradient	Зеркальный градиент
+	Reset to defaults	Сбросить к значениям по умолчанию
+	Set additional smoothing options	Дополнительные параметры сглаживания
+	Show Transform Controls	Показать управляющие элементы трансформации
+	Subtract from selection  ({key})	Вычесть из выделения  ({key})
+	Swaps height and width	Меняет местами высоту и ширину
+	Tolerance	Допуск
+	Add vector mask	Добавить векторную маску
+	Click to zoom in  ·  {key}-click to zoom out  ·  drag right/left to zoom in/out	Щелчок увеличивает  ·  {key}-щелчок уменьшает  ·  перетаскивание вправо/влево увеличивает/уменьшает
+	Appearance Settings…	Настройки оформления…
+	Add to favorites	Добавить в избранное
+	Remove from favorites	Удалить из избранного
+# File Info ▸ Camera Data (read-only EXIF fields; "Make" is the camera maker, not the verb).
+cameraData	Make	Производитель
+cameraData	Model	Модель
+cameraData	Date Taken	Дата съёмки
+cameraData	Exposure	Выдержка
+cameraData	F-Stop	Диафрагма
+cameraData	ISO Speed	Светочувствительность ISO
+cameraData	Focal Length	Фокусное расстояние
+cameraData	Focal Length (35 mm)	Фокусное расстояние (35 мм)
+cameraData	Lens	Объектив
+# Shared panel docking
+	Activate Panel	Активировать панель
+	Change Panel Group	Изменить группу панелей
+	Change Panel Layout	Изменить расположение панелей
+	Close Panel	Закрыть панель
+	Dock Panel	Закрепить панель
+	Float Panel	Сделать панель плавающей
+	Move Panel	Переместить панель
+	Group with	Сгруппировать с
+	Panel menu	Меню панели
+	Resize panel window	Изменить размер окна панели
+	Resize panels	Изменить размер панелей
 	Use Classic Mode	Использовать классический режим
 	Auto Center Preview	Автоматически центрировать просмотр
 	Next Document	Следующий документ
 	Previous Document	Предыдущий документ
 	W x H x Resolution	Ш x В x Разрешение
 	Front Image	Изображение переднего плана
-	Swaps height and width	Меняет местами высоту и ширину
+	Frame Tool	Рамка
+	Create a new rectangular frame	Создать прямоугольную рамку
+	Create a new elliptical frame	Создать эллиптическую рамку
+	Include in playback	Включить в воспроизведение
+	Perspective Crop Tool	Кадрирование перспективы
+	Show Grid	Показать сетку
+	Drag a box or click four corners · drag the corners onto the edges of a skewed shape · {commit} commits · Esc cancels	Растяните рамку или щёлкните четыре угла · перетащите углы на края наклонной фигуры · {commit} применяет · Esc отменяет
+	Artboard Tool	Монтажная область (инструмент)
+	Make Portrait	Сделать книжной
+	Make Landscape	Сделать альбомной
+	Add New Artboard	Добавить монтажную область
+	Freeform Pen Tool	Свободное перо
+	Curvature Pen Tool	Перо кривизны
+	Curve Fit:	Точность кривой:
+	Drag: draw freehand · Release on the start point: close	Перетаскивание: рисовать от руки · отпустить на начальной точке: замкнуть
+	Click: smooth point · Double-click: corner · Drag a point: move · Click first point: close · {key} finish	Клик: гладкая точка · двойной клик: угол · перетаскивание точки: переместить · клик по первой точке: замкнуть · {key} завершить
+	Scale:	Масштаб:
+	Snap to Origin	Привязать к началу координат
+	Link with Layer	Связать со слоем
 	Rasterize Layer Style	Растрировать стиль слоя
 	Search settings…	Поиск настроек…
 	No matching settings	Нет подходящих настроек
@@ -2730,3 +2900,30 @@ fontWeight	Italic	Курсив
 	Move Effect Down	Переместить эффект вниз
 	Reset Order	Сбросить порядок
 	Stack the effects in Photoshop's order	Расположить эффекты в порядке Photoshop
+# Select and Mask view modes (#1754)
+	Onion Skin	Калька
+	Marching Ants	Бегущие муравьи
+	On Black	На черном
+	On White	На белом
+	On Layers	На слоях
+	Show Edge	Показать край
+	Show Original	Показать исходное
+	F cycles the views; hold X to see the image	F переключает виды; удерживайте X, чтобы увидеть изображение
+# Select and Mask Refine Edge Brush (#2972)
+	Refine Edge Brush (R)	Кисть уточнения края (R)
+	Expand Detection Area	Расширить область обнаружения
+	Restore Original Edge	Восстановить исходный край
+	Paint over hair or fur on the image; Alt paints the other mode	Рисуйте по волосам или шерсти на изображении; Alt рисует в другом режиме
+	Clear Brush Strokes	Очистить мазки кисти
+	Show rulers	Показать линейки
+	New Crop Preset…	Новый набор параметров кадрирования…
+	Delete Crop Preset…	Удалить набор параметров кадрирования…
+	Select the crop presets to delete:	Выберите наборы параметров кадрирования для удаления:
+	Select the crop presets to delete	Выберите наборы параметров кадрирования для удаления
+	Enter a name for the crop preset	Введите имя набора параметров кадрирования
+	There is no crop size or ratio to save	Нет размера или соотношения сторон кадрирования для сохранения
+
+# Color Sampler (added with the i18n coverage repair)
+	Click to place · Alt-click or drag off-canvas to remove	Щёлкните, чтобы разместить · Alt-щелчок или перетаскивание за пределы холста для удаления
+	No document open	Документ не открыт
+	{n} of {max} sample points	{n} из {max} точек замера

@@ -11,6 +11,25 @@
 # Licensed MIT OR Apache-2.0, as the code.
 # Product and technology names retain their spelling. See docs/localization-zh-hans.md.
 
+# Guide layout dialog
+	Columns	列
+	Rows	行
+	Number	数量
+	Margin	边距
+	Top:	上:
+	Left:	左:
+	Bottom:	下:
+	Right:	右:
+	Target:	目标:
+	Selected Artboards	所选画板
+	Center Columns	列居中
+	Clear Existing Guides	清除现有参考线
+	Invalid guide layout	参考线布局无效
+	Leave empty for automatic size	留空以自动设置大小
+	5 Columns, 3 Rows	5列，3行
+	8 Columns	8列
+	12 Columns	12列
+
 	File	文件
 	Edit	编辑
 	Image	图像
@@ -682,10 +701,15 @@
 	New Workspace…	新建工作区…
 	Delete Workspace…	删除工作区…
 	Reset Workspace	重置工作区
+	Reset Tool	重置工具
+	Reset All Tools	重置所有工具
+	Reset all tools to their default settings?	要将所有工具重置为默认设置吗？
 	Lock Workspace	锁定工作区
 	Theme	主题
 	Pro Theme	专业主题
 	Pro Medium Gray Theme	专业中灰主题
+	Pro Light Gray Theme	专业浅灰主题
+	Pro Light Theme	专业浅色主题
 	Studio Theme	工作室主题
 	Studio Light Theme	工作室浅色主题
 	Adwaita Light Theme	Adwaita 浅色主题
@@ -820,6 +844,9 @@
 	Bend:	弯曲：
 	Bicubic	双三次
 	Bicubic (smooth gradients)	双三次（平滑渐变）
+	Automatic	自动
+	Bicubic Smoother (enlargement)	双三次（较平滑）（扩大）
+	Bicubic Sharper (reduction)	双三次（较锐利）（缩减）
 	Bilinear	双线性
 	Black	黑色
 	Black & White	黑白
@@ -1198,6 +1225,8 @@
 	Midtones from:	中间调下限：
 	Midtones to:	中间调上限：
 	Mixer Brush Tool	混合画笔工具
+	Color Replacement Tool	颜色替换工具
+	Color Replacement	颜色替换
 	Minimum Depth	最小深度
 	Minimum Diameter	最小直径
 	Minimum Roundness	最小圆度
@@ -1624,6 +1653,8 @@
 	Highlights from:	高光下限：
 	History Brush Tool	历史记录画笔工具
 	Horizontal Type Tool	横排文字工具
+	Horizontal Type Mask Tool	横排文字蒙版工具
+	Vertical Type Mask Tool	直排文字蒙版工具
 	Image Size:	图像大小：
 	Inches	英寸
 	Indexed	索引色
@@ -1679,10 +1710,15 @@
 	Paints from the document's opening state	从文档打开时的状态绘制
 	Path Selection Tool	路径选择工具
 	Direct Selection Tool	直接选择工具
+	Add Anchor Point Tool	添加锚点工具
+	Delete Anchor Point Tool	删除锚点工具
+	Click a segment to add an anchor point · {alt}-click an anchor to delete it	单击线段以添加锚点 · {alt}-单击锚点：删除锚点
+	Click an anchor point to delete it · {alt}-click a segment to add one	单击锚点将其删除 · {alt}-单击线段：添加锚点
 	Pattern Overlay	图案叠加
 	Pen Pressure	钢笔压力
 	Pen Tilt	钢笔倾斜
 	Pen Tool	钢笔工具
+	Convert Point Tool	转换点工具
 	Photo	照片
 	PhotoCraft website	PhotoCraft 网站
 	Picas	派卡
@@ -1698,6 +1734,8 @@
 	Postcard	明信片
 	Poster	海报
 	Pro (Dark)	专业（深色）
+	Pro (Light)	专业（浅色）
+	Pro (Light Gray)	专业（浅灰色）
 	Pro (Medium Gray)	专业（中灰色）
 	Protect Texture	保护纹理
 	Purple	紫色
@@ -1806,6 +1844,7 @@
 	Cache tile size	缓存图块大小
 	Camera Raw Defaults	Camera Raw 默认设置
 	Canvas border	画布边框
+	Show canvas dots	显示画布圆点
 	Canvas color	画布颜色
 	Canvas custom color	画布自定颜色
 	Color picker	拾色器
@@ -1893,6 +1932,8 @@
 	Preserve details	保留细节
 	Print resolution	打印分辨率
 	Pro	专业
+	Pro light	专业（浅色）
+	Pro light gray	专业（浅灰色）
 	Pro medium	专业（中灰色）
 	Pro photo	专业（摄影）
 	Quick export format	快速导出格式
@@ -2151,7 +2192,9 @@ cameraRaw	Blending	混合
 	Developing {name}	正在处理 {name}
 	Cancelled {label}	已取消 {label}
 	Esc to cancel	按 Esc 取消
+	Opened {name}	已打开 {name}
 	Opening {name}	正在打开 {name}
+	Saved {name}	已保存 {name}
 	Saving {name}	正在保存 {name}
 	A save to {name} is still running; try again when it finishes	仍在保存到 {name}；请在完成后重试
 	{label} is writing the file and can no longer be cancelled	{label} 正在写入文件，已无法取消
@@ -2195,6 +2238,9 @@ cameraRaw	Blending	混合
 	Structure:	结构：
 	Content-Aware Move Tool	内容感知移动工具
 	TIFF Options	TIFF 选项
+	Targa Options	Targa 选项
+	24 bits/pixel	24 位/像素
+	32 bits/pixel	32 位/像素
 	Including layers will increase file size.	包含图层会增加文件大小。
 	Discard Layers and Save a Copy	扔掉图层并存储副本
 	Don't show again	不再显示
@@ -2284,6 +2330,21 @@ cameraRaw	Blending	混合
 	Domed	圆顶
 	Domed (Inverted)	圆顶（反转）
 	Diagonal (Descending)	对角线（下降）
+	Contour Editor	等高线编辑器
+	Anti-aliased	消除锯齿
+	Corner	角点
+	Gloss Contour	光泽等高线
+	Contour	等高线
+	Cone - Inverted	锥形 - 反转
+	Cove - Deep	凹槽 - 深
+	Cove - Shallow	凹槽 - 浅
+	Gaussian	高斯
+	Half Round	半圆
+	Ring	环形
+	Ring - Double	环形 - 双
+	Rolling Slope - Descending	滚动斜坡 - 递减
+	Rounded Steps	圆角梯形
+	Sawtooth 1	锯齿 1
 
 	Red Eye Tool	红眼工具
 	Red Eye	红眼
@@ -2440,12 +2501,67 @@ fontWeight	Italic	斜体
 	Quick Selection found nothing there	快速选择在该处未找到任何内容
 	Object Selection found nothing there — try a tighter rectangle	对象选择在该处未找到任何内容 — 请尝试更紧凑的矩形
 	No subject found — try a rectangle around the object	未找到主体 — 请尝试在对象周围绘制矩形
+	Auto Erase	自动抹除
+	Click the first point or press {key} to close · {del} removes a point · Esc cancels	点按第一个点或按 {key} 闭合 · {del} 删除一个点 · Esc 取消
+	Click, then move along an edge · click to fasten a point · {alt}-click for a straight segment · double-click to close	点按，然后沿边缘移动 · 点按固定一个点 · {alt}-点按画直线段 · 双击闭合
+	Follows only edges this close to the pointer ([ and ] change it)	只跟随离指针这么近的边缘（用 [ 和 ] 调整）
+	Higher values follow only edges that contrast sharply with their surroundings	数值越高，只跟随与周围对比强烈的边缘
+	How often fastening points are placed by themselves	自动放置紧固点的频率
+	Scrubby Zoom	细微缩放
+	{mode} Color · {bits} bit	{mode} 颜色 · {bits} 位
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	拖移绘制裁剪框 · 在框内拖移以移动 · 拖移边缘调整大小（{ratio} 比例，{centre} 中心）· 绘制时按 Space 移动 · 方向键微移 · X 切换方向 · {commit} 确认 · Esc 取消
+	Appearance Settings…	外观设置…
+	Add to favorites	添加到收藏
+	Remove from favorites	从收藏中移除
+# File Info ▸ Camera Data (read-only EXIF fields; "Make" is the camera maker, not the verb).
+	Camera Data	相机数据
+cameraData	Make	制造商
+cameraData	Model	型号
+cameraData	Date Taken	拍摄日期
+cameraData	Exposure	曝光时间
+cameraData	F-Stop	光圈值
+cameraData	ISO Speed	ISO 感光度
+cameraData	Focal Length	焦距
+cameraData	Focal Length (35 mm)	焦距（35 毫米等效）
+cameraData	Lens	镜头
+# Shared panel docking
+	Activate Panel	激活面板
+	Change Panel Group	更改面板组
+	Change Panel Layout	更改面板布局
+	Close Panel	关闭面板
+	Dock Panel	停靠面板
+	Float Panel	浮动面板
+	Move Panel	移动面板
+	Group with	与此面板分组
+	Panel menu	面板菜单
+	Resize panel window	调整面板窗口大小
+	Resize panels	调整面板大小
 	Use Classic Mode	使用经典模式
 	Auto Center Preview	自动居中预览
 	Next Document	下一个文档
 	Previous Document	上一个文档
 	W x H x Resolution	宽 x 高 x 分辨率
 	Front Image	前面的图像
+	Frame Tool	图框工具
+	Create a new rectangular frame	新建矩形图框
+	Create a new elliptical frame	新建椭圆图框
+	Include in playback	包含在播放中
+	Perspective Crop Tool	透视裁剪工具
+	Show Grid	显示网格
+	Drag a box or click four corners · drag the corners onto the edges of a skewed shape · {commit} commits · Esc cancels	拖动方框或单击四个角 · 将角拖到倾斜形状的边缘 · {commit} 确认 · Esc 取消
+	Artboard Tool	画板工具
+	Make Portrait	设为纵向
+	Make Landscape	设为横向
+	Add New Artboard	添加新画板
+	W	宽
+	H	高
+	Freeform Pen Tool	自由钢笔工具
+	Curvature Pen Tool	弯度钢笔工具
+	Curve Fit:	曲线拟合：
+	Drag: draw freehand · Release on the start point: close	拖动：自由绘制 · 在起点松开：闭合
+	Click: smooth point · Double-click: corner · Drag a point: move · Click first point: close · {key} finish	单击：平滑点 · 双击：角点 · 拖动点：移动 · 单击起点：闭合 · {key} 完成
+	Scale:	缩放：
+	Snap to Origin	贴紧原点
 	Search settings…	搜索设置…
 	No matching settings	没有匹配的设置
 # Layer Style > effect order (PhotoCraft: a reorderable stack)
@@ -2453,3 +2569,30 @@ fontWeight	Italic	斜体
 	Move Effect Down	下移效果
 	Reset Order	重置顺序
 	Stack the effects in Photoshop's order	按 Photoshop 的顺序堆叠效果
+# Select and Mask view modes (#1754)
+	Onion Skin	洋葱皮
+	Marching Ants	蚂蚁线
+	On Black	黑底
+	On White	白底
+	On Layers	图层上
+	Show Edge	显示边缘
+	Show Original	显示原始
+	F cycles the views; hold X to see the image	按 F 切换视图；按住 X 查看图像
+# Select and Mask Refine Edge Brush (#2972)
+	Refine Edge Brush (R)	调整边缘画笔 (R)
+	Expand Detection Area	扩展检测区域
+	Restore Original Edge	恢复原始边缘
+	Paint over hair or fur on the image; Alt paints the other mode	在图像中的头发或毛发上涂抹；按住 Alt 以另一种模式涂抹
+	Clear Brush Strokes	清除画笔描边
+	Show rulers	显示标尺
+	New Crop Preset…	新建裁剪预设…
+	Delete Crop Preset…	删除裁剪预设…
+	Select the crop presets to delete:	选择要删除的裁剪预设：
+	Select the crop presets to delete	选择要删除的裁剪预设
+	Enter a name for the crop preset	输入裁剪预设的名称
+	There is no crop size or ratio to save	没有可保存的裁剪大小或比例
+
+# Color Sampler (added with the i18n coverage repair)
+	Click to place · Alt-click or drag off-canvas to remove	单击以放置 · Alt 单击或拖到画布外以移除
+	No document open	未打开任何文档
+	{n} of {max} sample points	{max} 个取样点中的 {n} 个

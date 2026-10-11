@@ -50,9 +50,9 @@ note = "fill_ui.rs dialog over edit.fill (fill_cmds.rs): all contents, mode, opa
 [[item]]
 id = "TOOL-213-7"
 target = "Live stroke preview for every brush-based retouch tool"
-status = "missing"
+status = "partial"
 issue = 213
-note = "Live stroke only for Brush and Eraser (canvas.rs:1684)"
+note = "Live (canvas.rs strokes_live): Brush, Pencil, Eraser, Blur, Sharpen, Smudge, Dodge, Burn, Sponge, Clone Stamp, Healing Brush, History Brush (#1026, #1040); the release commits the live stroke's pixels (P32). Not yet live: Spot Healing Brush, Mixer Brush, Background Eraser, Pattern Stamp"
 
 [[item]]
 id = "TOOL-213-8"
@@ -115,7 +115,7 @@ id = "TOOL-214-1"
 target = "Select and Mask workspace: view modes, Refine Edge brush, 6 outputs"
 status = "partial"
 issue = 214
-note = "Opens the generic select.refineEdge dialog (menus.rs:308)"
+note = "select.refineEdge dialog with a live preview in Photoshop's view modes: Onion Skin, Marching Ants, Overlay, On Black, On White, Black & White, On Layers, per-view Opacity, Show Edge (J), Show Original (P), F cycles, X shows the image (select_mask_view.rs, #1754); Refine Edge Brush (R, size, Expand Detection Area / Restore Original Edge, Alt swaps) paints select.refineEdge refineStrokes, estimated by colour-line matting (matting/brush.rs, #2972); outputs Selection, Layer Mask, New Layer, New Layer with Mask; no workspace layout or New Document outputs"
 
 [[item]]
 id = "TOOL-214-2"
@@ -136,14 +136,14 @@ id = "TOOL-214-4"
 target = "Move tool: box-select layers, Auto-Select hover outline, double-click fit, drag to a tab"
 status = "partial"
 issue = 214
-note = "Auto-Select hover outline done (Preferences › Tools › Show Highlight on Rollover, #2834); box-select layers, double-click fit and drag to a tab open"
+note = "Auto-Select hover outline (Preferences › Tools › Show Highlight on Rollover, #2834) and box-select layers from an empty spot (move_box.rs, layer.selectInRect, #2844) done; double-click fit and drag to a tab open"
 
 [[item]]
 id = "TOOL-214-5"
 target = "Right-click menu during Free Transform (scale, rotate, skew, warp, flip, rotate 90/180)"
-status = "missing"
+status = "done"
 issue = 214
-note = "No context menu in canvas.rs or transform_tool.rs"
+note = "canvas_tool_menu.rs TRANSFORM_MENU: modes, Content-Aware Scale / Puppet Warp greyed, Rotate 180 / 90 CW / 90 CCW and Flip turn the open box (transform_tool::intercept, #2832)"
 
 [[item]]
 id = "TOOL-214-6"
@@ -162,16 +162,16 @@ note = "edit.contentAwareScale (edit_menu_cmds.rs:899) behind a parameter dialog
 [[item]]
 id = "TOOL-214-8"
 target = "A measured ruler angle prefills Image Rotation > Arbitrary (0.01 deg)"
-status = "missing"
+status = "done"
 issue = 214
-note = "Arbitrary rotation is a generic dialog; ruler only feeds straighten"
+note = "analysis_ui.rs: image.rotation.arbitrary opens seeded with the ruler angle and the direction that straightens it; arbitrary_rotation_starts_at_the_ruler_angle checks 5.7106 deg within 1e-3 and cw/ccw for three measured lines"
 
 [[item]]
 id = "TOOL-214-9"
 target = "Crop: W x H x Resolution with units, saved crop presets, Straighten in the options bar"
-status = "partial"
+status = "done"
 issue = 214
-note = "Ratio dropdown and fields, Straighten (TOOL-214-21); W x H x Resolution with units, built-in size presets and Front Image (crop_size.rs, image.crop targetWidth/targetHeight/resolution, #2443); no New/Delete Crop Preset"
+note = "Ratio dropdown and fields, Straighten (TOOL-214-21); W x H x Resolution with units, built-in size presets and Front Image (crop_size.rs, image.crop targetWidth/targetHeight/resolution, #2443); New / Delete Crop Preset save and delete crop tool presets (crop_presets.rs, tool.presets.* with tool crop, persisted with the preferences)"
 
 [[item]]
 id = "TOOL-214-10"
@@ -241,7 +241,7 @@ id = "TOOL-1649-1"
 target = "Eyedropper Sample Size (Point, 3×3 … 101×101 Average), Sample layers, Show Sampling Ring"
 status = "done"
 issue = 1649
-note = "document.sampleColor (sample_cmds.rs): average of the square clipped to the canvas, in the document's model and depth; eyedropper_ui.rs options bar; shared with Alt-click, dialog eyedroppers and the Info panel; ui.set eyedropperSampleSize/eyedropperSample/eyedropperRing. Color Sampler tool still missing"
+note = "document.sampleColor (sample_cmds.rs): average of the square clipped to the canvas, in the document's model and depth; eyedropper_ui.rs options bar; shared with Alt-click, dialog eyedroppers and the Info panel; ui.set eyedropperSampleSize/eyedropperSample/eyedropperRing. Color Sampler tool is separate (#1046, sampler_cmds.rs)"
 
 [[item]]
 id = "TOOL-214-20"
@@ -298,3 +298,10 @@ target = "Remove tool: paint over an object (or circle it) and it is filled from
 status = "partial"
 issue = 213
 note = "paint.remove (retouch_cmds/remove.rs, background job) + Tool::Remove in the J flyout; loops close over what they enclose; fill by non-local patch completion with texture features, onion-peel start, best-patch copy and gradient-domain seam hiding (algo/nonlocal.rs, Newson et al. IPOL 2017); sparse holes in tiles (algo/remove.rs). remove_quality on 20 holes in public-domain photos: the fill keeps 0.89 of the texture it replaces (0.54 with Content-Aware Fill's completion), edge gradient 1.03 of the original's; remove_bench 24 MP: 100 px ring 120 ms, 1000 px ring 2.5 s, 3000 px line 1.7 s. Missing: generative AI mode, Remove after each stroke off, live preview of the result"
+
+[[item]]
+id = "TOOL-1045-1"
+target = "Color Replacement tool on the toolbar"
+status = "done"
+issue = 1045
+note = "Tool::ColorReplacement in the Brush (B) flyout after the Mixer Brush; Mode/Sampling/Limits/Tolerance/Anti-alias options drive paint.colorReplacement with the foreground colour; live preview (LiveDab with the stroke's finishing dab), one History step; color_replacement_tests.rs"

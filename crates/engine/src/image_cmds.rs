@@ -41,6 +41,12 @@ pub(crate) fn for_each_surface(layers: &mut [Layer], masks: bool, f: &mut dyn Fn
                 if let Some(c) = &mut sm.cache {
                     f(c, false)
                 }
+                // Selection-derived smart-filter masks live in document coordinates. Every
+                // canvas resize/translation must carry them with the smart object's cache;
+                // otherwise toggling a filter recomputes its coverage at stale positions (#3077).
+                if masks && let Some(mask) = &mut sm.filter_mask {
+                    f(&mut mask.surface, true);
+                }
             }
             LayerContent::Group(g) => for_each_surface(&mut g.children, masks, f),
             _ => {}
@@ -125,11 +131,24 @@ pub(crate) fn scale_effects(fx: &mut Effects, k: f32) {
     }
 }
 
-fn parse_resample(s: &str) -> Option<Resample> {
-    Some(match s {
-        "none" => return None,
+/// Image Size's resampling methods; `None` changes the resolution only.
+#[derive(Clone, Copy)]
+enum Method {
+    None,
+    Filter(Resample),
+    /// Photoshop's Automatic: Preserve Details where the image grows, Bicubic Sharper otherwise.
+    Automatic,
+}
+
+fn parse_resample(s: &str) -> Method {
+    Method::Filter(match s {
+        "none" => return Method::None,
+        "automatic" => return Method::Automatic,
         "nearest" | "nearestNeighbor" => Resample::Nearest,
         "bilinear" => Resample::Bilinear,
+        "bicubicSmoother" => Resample::BicubicSmoother,
+        "bicubicSharper" => Resample::BicubicSharper,
+        "bicubicAutomatic" => Resample::BicubicAutomatic,
         "lanczos" => Resample::Lanczos,
         "preserveDetails" => Resample::PreserveDetails,
         _ => Resample::Bicubic,
@@ -156,15 +175,25 @@ fn image_size(s: &mut Session, p: &Value) -> Result<Value> {
     let (nw, nh) = (nw.round().clamp(1.0, 300_000.0) as u32, nh.round().clamp(1.0, 300_000.0) as u32);
     // Each side may reach 300000 px, but resampling writes real pixels: refuse a canvas whose
     // raster alone would pass the budget, before allocating any of it (#1544).
-    if resample.is_some() && (nw, nh) != (ow, oh) {
+    if !matches!(resample, Method::None) && (nw, nh) != (ow, oh) {
         check_resample_budget("image.imageSize", &d.doc, nw, nh, ", or turn Resample off to change only the resolution")?;
     }
     let dpi = p.get("resolution").and_then(Value::as_f64).map(|v| v as f32);
+    if !matches!(resample, Method::None) && (nw, nh) != (ow, oh) {
+        // Color Sampler points scale with the pixels (same map `transform_geometry` applies).
+        let (sx, sy) = (f64::from(nw) / f64::from(ow.max(1)), f64::from(nh) / f64::from(oh.max(1)));
+        s.set_sampler_map(photocraft_geom::Affine { m: [sx, 0.0, 0.0, sy, 0.0, 0.0] });
+    }
     s.edit("Image Size", |doc, _| {
         if let Some(r) = dpi {
             doc.resolution_dpi = r.clamp(1.0, 10_000.0);
         }
-        let Some(filter) = resample else { return Ok(()) };
+        let filter = match resample {
+            Method::None => return Ok(()),
+            Method::Filter(f) => f,
+            Method::Automatic if nw > ow || nh > oh => Resample::PreserveDetails,
+            Method::Automatic => Resample::BicubicSharper,
+        };
         resample_doc(doc, nw, nh, filter);
         Ok(())
     })?;
@@ -175,7 +204,7 @@ fn image_size(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Refuses to resample `doc` to `nw` x `nh` px when the raster alone would pass the budget, before
 /// allocating any of it (#1544). `hint` ends the message with what the caller can do instead.
-fn check_resample_budget(cmd: &str, doc: &Document, nw: u32, nh: u32, hint: &str) -> Result<()> {
+pub(crate) fn check_resample_budget(cmd: &str, doc: &Document, nw: u32, nh: u32, hint: &str) -> Result<()> {
     let bpp = doc.pixel_format().bytes_per_pixel().max(1) as u64;
     let bytes = u64::from(nw).saturating_mul(u64::from(nh)).saturating_mul(bpp);
     if bytes <= MAX_RESAMPLE_BYTES {
@@ -312,6 +341,7 @@ fn canvas_size(s: &mut Session, p: &Value) -> Result<Value> {
     let dx = ((nw as f64 - ow) * ax).round() as i32;
     let dy = ((nh as f64 - oh) * ay).round() as i32;
     let ext = extension_color(s, p);
+    s.set_sampler_map(photocraft_geom::Affine::translate(f64::from(dx), f64::from(dy)));
     s.edit("Canvas Size", |doc, _| {
         translate_doc(doc, "image.canvasSize", dx, dy)?;
         doc.size = Size::new(nw, nh);
@@ -395,6 +425,7 @@ fn crop(s: &mut Session, p: &Value) -> Result<Value> {
     if r.is_empty() {
         return Err(EngineError::Other("nothing to crop: pass x/y/width/height or make a selection".into()));
     }
+    s.set_sampler_map(photocraft_geom::Affine::translate(-f64::from(r.x0), -f64::from(r.y0)));
     s.edit("Crop", |doc, _| {
         crop_doc(doc, "image.crop", r, delete)?;
         doc.selection = None;
@@ -456,7 +487,12 @@ fn crop_target(p: &Value) -> Result<CropTarget> {
     };
     let filter = match p.get("resample") {
         None | Some(Value::Null) => Some(Resample::Bicubic),
-        Some(v) => parse_resample(v.as_str().ok_or_else(|| bad(CMD, "`resample` must be a string"))?),
+        Some(v) => match parse_resample(v.as_str().ok_or_else(|| bad(CMD, "`resample` must be a string"))?) {
+            Method::None => None,
+            Method::Filter(f) => Some(f),
+            // The direction is known only once the frame is: bicubic's own automatic choice.
+            Method::Automatic => Some(Resample::BicubicAutomatic),
+        },
     };
     let filter = match (filter, size) {
         (Some(f), _) => f,
@@ -523,6 +559,8 @@ fn rotated_crop(s: &mut Session, r: Rect, angle: f64, delete: bool, crop_target:
     let target = Rect::new(x, y, x1, y1);
     crate::analysis_cmds::compound(s, "Crop", |s| {
         crate::mode_cmds::rotate_arbitrary(s, &json!({"angle": angle, "direction": "ccw"}))?;
+        // Color Sampler points follow the crop's origin shift too (the rotation moved them above).
+        s.set_sampler_map(photocraft_geom::Affine::translate(-f64::from(target.x0), -f64::from(target.y0)));
         s.edit("Crop", |doc, _| {
             crop_doc(doc, CMD, target, delete)?;
             doc.selection = None;
@@ -566,6 +604,7 @@ fn trim(s: &mut Session, p: &Value) -> Result<Value> {
         if side("right") { b.x1 } else { canvas.x1 },
         if side("bottom") { b.y1 } else { canvas.y1 },
     );
+    s.set_sampler_map(photocraft_geom::Affine::translate(-f64::from(r.x0), -f64::from(r.y0)));
     s.edit("Trim", |doc, _| crop_doc(doc, "image.trim", r, true))?;
     Ok(json!({ "x": r.x0, "y": r.y0, "width": r.width(), "height": r.height() }))
 }
@@ -633,7 +672,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.imageSize",
             "Image Size…",
             ["Image"],
-            r##"{"width":px,"height":px,"resolution":ppi,"resample":"bicubic|bilinear|nearest|lanczos|preserveDetails|none"="bicubic"} → {width,height} (the document's size after the command; "none" changes the resolution only)"##,
+            r##"{"width":px,"height":px,"resolution":ppi,"resample":"automatic|preserveDetails|bicubicSmoother|bicubicSharper|bicubicAutomatic|bicubic|nearest|bilinear|lanczos|none"="bicubic"} → {width,height} (the document's size after the command; "none" changes the resolution only)"##,
             has_doc,
             image_size
         ),
@@ -778,7 +817,7 @@ mod tests {
 
     #[test]
     fn image_size_scales_everything() {
-        for resample in ["bicubic", "bilinear", "nearest", "lanczos", "preserveDetails"] {
+        for resample in ["bicubic", "bicubicSmoother", "bicubicSharper", "bicubicAutomatic", "automatic", "bilinear", "nearest", "lanczos", "preserveDetails"] {
             let mut s = session();
             s.execute("image.imageSize", json!({"width": 80, "resample": resample})).unwrap();
             let d = doc(&s);
@@ -813,7 +852,15 @@ mod tests {
     #[test]
     fn image_size_keeps_canvas_edges_opaque() {
         for depth in [8, 16, 32] {
-            for (w, resample) in [(60, "bicubic"), (41, "lanczos"), (15, "bilinear"), (77, "preserveDetails")] {
+            for (w, resample) in [
+                (60, "bicubic"),
+                (41, "lanczos"),
+                (15, "bilinear"),
+                (77, "preserveDetails"),
+                (21, "bicubicSharper"),
+                (47, "automatic"),
+                (9, "bicubicAutomatic"),
+            ] {
                 let mut s = Session::new();
                 s.execute("file.new", json!({"width": 30, "height": 20, "depth": depth, "background": "#336699"})).unwrap();
                 s.execute("select.all", json!({})).unwrap();
@@ -891,7 +938,7 @@ mod tests {
         let surf = st.doc.layers[0].surface().unwrap();
         for (x, y) in [(0, 0), (1, 1), (2, 3)] {
             let v = surf.rgba(x, y)[0];
-            assert!(v < 0.01 || v > 0.99, "nearest produced an averaged value {v} at ({x},{y})");
+            assert!(!v.is_nan() && !(0.01..=0.99).contains(&v), "nearest produced an averaged value {v} at ({x},{y})");
         }
     }
 

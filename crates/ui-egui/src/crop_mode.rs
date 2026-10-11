@@ -132,7 +132,8 @@ pub struct LiveResize {
 /// press and grows or shrinks symmetrically there, so the handle stays under the pointer, while on
 /// the image the opposite edge stays put (the centre with ⌥), as in a plain resize. Everything is
 /// computed from the press, so the view following the frame can't feed back into the drag.
-pub fn live_resize(app: &mut PhotocraftApp, g: LiveResize, press: PressView) {
+/// Returns the proposed frame and the camera's document-space offset without changing the app.
+pub(crate) fn resized_frame(g: LiveResize) -> Option<([f64; 4], [f64; 2])> {
     let LiveResize { rect, deg, hx, hy, start, q, ratio, alt } = g;
     let c0 = crate::crop_ui::center(rect);
     let (w0, h0) = (rect[2] - rect[0], rect[3] - rect[1]);
@@ -147,9 +148,12 @@ pub fn live_resize(app: &mut PhotocraftApp, g: LiveResize, press: PressView) {
     let s = crate::crop_ui::turn(shift, [0.0, 0.0], deg);
     let c1 = [c0[0] + s[0], c0[1] + s[1]];
     let f = [c1[0] - w1 / 2.0, c1[1] - h1 / 2.0, c1[0] + w1 / 2.0, c1[1] + h1 / 2.0];
-    if !f.iter().all(|v| v.is_finite()) {
-        return;
-    }
+    f.iter().all(|v| v.is_finite()).then_some((f, s))
+}
+
+/// Move the camera with the resized frame to keep the crop box's centre stationary on screen.
+pub fn live_resize(app: &mut PhotocraftApp, g: LiveResize, press: PressView) {
+    let Some((f, s)) = resized_frame(g) else { return };
     app.ui.crop_rect = Some(f);
     // The view follows the centre, so the box stays where it was on screen.
     if let Some(v) = app.session.active_index().and_then(|i| app.ui.views.get_mut(i)) {
@@ -213,6 +217,14 @@ pub fn to_press(app: &PhotocraftApp, press: Option<PressView>, p: [f64; 2]) -> [
     match (press, press_view(app)) {
         (Some(press), Some(now)) => remap(p, now, press, app.ui.view.flip_horizontal),
         _ => p,
+    }
+}
+
+/// A press-view point mapped back into the current camera after snapping the crop handle.
+pub(crate) fn from_press(app: &PhotocraftApp, press: PressView, p: [f64; 2]) -> [f64; 2] {
+    match press_view(app) {
+        Some(now) => remap(p, press, now, app.ui.view.flip_horizontal),
+        None => p,
     }
 }
 
@@ -335,6 +347,45 @@ mod tests {
         crate::crop_ui::ensure_frame(app);
         app.ui.crop_rect = Some([40.0, 30.0, 100.0, 70.0]);
         app.crop.default_frame = false;
+    }
+
+    #[test]
+    fn a_live_resize_snaps_the_handle_without_feedback_from_the_camera() {
+        for (hx, hy) in [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, -1), (1, -1), (-1, 1)] {
+            for alt in [false, true] {
+                for (zoom, ppp, flip, ratio) in [(1.0, 1.0, false, false), (0.5, 1.0, false, true), (3.0, 2.0, false, false), (3.0, 2.0, true, true)] {
+                    let mut app = app();
+                    app.ppp = ppp;
+                    app.ui.views[0].zoom = zoom;
+                    app.ui.view.flip_horizontal = flip;
+                    if ratio {
+                        app.ui.tool_options.crop_ratio = "original".into();
+                    }
+                    app.ui.extras.snap = true;
+                    crate::crop_ui::ensure_frame(&mut app);
+                    let box0 = screen_box(&app);
+                    let c = mid_of(box0);
+                    let from = xf(&app).to_screen(100.0 + hx as f32 * 100.0, 50.0 + hy as f32 * 50.0);
+                    let direction = (from - c).normalized();
+                    let mods = if alt { Modifiers::ALT } else { NONE };
+                    let d = xf(&app).to_doc(from);
+                    tool_event(&mut app, ToolEvent::Down { x: d[0], y: d[1], pressure: 1.0 }, mods);
+                    // Leave the snap radius, then return just inside it. A still pointer must
+                    // settle on the canvas edge instead of alternating on opposite sides of it.
+                    for offset in [20.0, -2.0, -2.0, -2.0, -2.0, -2.0] {
+                        let p = from + direction * offset;
+                        let d = xf(&app).to_doc(p);
+                        tool_event(&mut app, ToolEvent::Move { x: d[0], y: d[1], pressure: 1.0 }, mods);
+                        if offset == -2.0 {
+                            assert!(close(screen_box(&app), box0), "handle ({hx}, {hy}), Alt {alt}: {:?}", app.ui.crop_rect);
+                        }
+                    }
+                    let d = xf(&app).to_doc(from + direction * -2.0);
+                    tool_event(&mut app, ToolEvent::Up { x: d[0], y: d[1] }, mods);
+                    assert!(close(screen_box(&app), box0), "release: {:?}", app.ui.crop_rect);
+                }
+            }
+        }
     }
 
     #[test]

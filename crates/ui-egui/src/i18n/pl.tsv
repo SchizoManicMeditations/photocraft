@@ -18,6 +18,23 @@
 # Conventions: menus are nouns (Plik, Edycja, Obraz ...), commands are infinitives (Otwórz…,
 # Zapisz jako…), sentence case as in the English source. Quotes: „…”.
 
+# Guide layout dialog
+	Rows	Wiersze
+	Number	Liczba
+	Top:	Góra:
+	Left:	Lewo:
+	Bottom:	Dół:
+	Right:	Prawo:
+	Target:	Cel:
+	Selected Artboards	Wybrane obszary kompozycji
+	Center Columns	Wyśrodkuj kolumny
+	Clear Existing Guides	Usuń istniejące linie pomocnicze
+	Invalid guide layout	Nieprawidłowy układ linii pomocniczych
+	Leave empty for automatic size	Pozostaw puste dla rozmiaru automatycznego
+	5 Columns, 3 Rows	5 kolumn, 3 wiersze
+	8 Columns	8 kolumn
+	12 Columns	12 kolumn
+
 	File	Plik
 	Edit	Edycja
 	Image	Obraz
@@ -680,10 +697,15 @@
 	New Workspace…	Nowy obszar roboczy…
 	Delete Workspace…	Usuń obszar roboczy…
 	Reset Workspace	Resetuj obszar roboczy
+	Reset Tool	Resetuj narzędzie
+	Reset All Tools	Resetuj wszystkie narzędzia
+	Reset all tools to their default settings?	Przywrócić domyślne ustawienia wszystkich narzędzi?
 	Lock Workspace	Zablokuj obszar roboczy
 	Theme	Motyw
 	Pro Theme	Motyw Pro
 	Pro Medium Gray Theme	Motyw Pro (średni szary)
+	Pro Light Gray Theme	Motyw Pro (jasnoszary)
+	Pro Light Theme	Motyw Pro (jasny)
 	Studio Theme	Motyw Studio
 	Studio Light Theme	Motyw Studio (jasny)
 	Adwaita Light Theme	Motyw Adwaita (jasny)
@@ -818,6 +840,9 @@
 	Bend:	Zgięcie:
 	Bicubic	Dwusześcienna
 	Bicubic (smooth gradients)	Dwusześcienna (gładkie gradienty)
+	Automatic	Automatycznie
+	Bicubic Smoother (enlargement)	Dwusześcienna wygładzona (powiększanie)
+	Bicubic Sharper (reduction)	Dwusześcienna wyostrzona (zmniejszanie)
 	Bilinear	Dwuliniowa
 	Black	Czarny
 	Black & White	Czerń i biel
@@ -1608,6 +1633,8 @@
 	Highlights from:	Światła od:
 	History Brush Tool	Narzędzie Pędzel historii
 	Horizontal Type Tool	Narzędzie Tekst poziomy
+	Horizontal Type Mask Tool	Narzędzie Maska tekstu poziomego
+	Vertical Type Mask Tool	Narzędzie Maska tekstu pionowego
 	Image Size:	Rozmiar obrazu:
 	Inches	Cale
 	Indexed	Indeksowany
@@ -1662,10 +1689,15 @@
 	Paints from the document's opening state	Maluje na podstawie stanu dokumentu z chwili otwarcia
 	Path Selection Tool	Narzędzie Zaznaczanie ścieżki
 	Direct Selection Tool	Narzędzie Zaznaczanie bezpośrednie
+	Add Anchor Point Tool	Narzędzie Dodaj punkt kontrolny
+	Delete Anchor Point Tool	Narzędzie Usuń punkt kontrolny
+	Click a segment to add an anchor point · {alt}-click an anchor to delete it	Kliknij segment, aby dodać punkt kontrolny · {alt}-klik na punkcie kontrolnym usuwa go
+	Click an anchor point to delete it · {alt}-click a segment to add one	Kliknij punkt kontrolny, aby go usunąć · {alt}-klik na segmencie dodaje punkt
 	Pattern Overlay	Nakładka wzoru
 	Pen Pressure	Nacisk pióra
 	Pen Tilt	Nachylenie pióra
 	Pen Tool	Narzędzie Pióro
+	Convert Point Tool	Narzędzie Konwertuj punkt
 	Photo	Zdjęcie
 	PhotoCraft website	Strona internetowa PhotoCraft
 	Picas	Pikasy
@@ -1681,6 +1713,8 @@
 	Postcard	Pocztówka
 	Poster	Plakat
 	Pro (Dark)	Pro (ciemny)
+	Pro (Light)	Pro (jasny)
+	Pro (Light Gray)	Pro (jasnoszary)
 	Pro (Medium Gray)	Pro (średni szary)
 	Protect Texture	Chroń teksturę
 	Purple	Fioletowy
@@ -1793,6 +1827,7 @@
 	Cache tile size	Rozmiar kafla pamięci podręcznej
 	Camera Raw Defaults	Domyślne ustawienia Camera Raw
 	Canvas border	Obramowanie płótna
+	Show canvas dots	Pokaż kropki płótna
 	Canvas color	Kolor płótna
 	Canvas custom color	Własny kolor płótna
 	Color picker	Próbnik kolorów
@@ -1879,6 +1914,8 @@
 	Preserve details	Zachowaj szczegóły
 	Print resolution	Rozdzielczość wydruku
 	Pro	Pro
+	Pro light	Pro jasny
+	Pro light gray	Pro jasnoszary
 	Pro medium	Pro średni
 	Pro photo	ProPhoto
 	Quick export format	Format szybkiego eksportu
@@ -2033,6 +2070,7 @@
 	Apply the pen's tilt and rotation to the tip shape	Zastosuj nachylenie i obrót pióra do kształtu końcówki
 	Mixer Brush	Pędzel mieszający
 	Mixer Brush Tool	Narzędzie Pędzel mieszający
+	Color Replacement Tool	Narzędzie Zamiana koloru
 	Wet	Wilgotność
 	Mix	Mieszanie
 	Wetness Jitter	Rozrzut wilgotności
@@ -2083,7 +2121,9 @@
 	Cancelled opening {name}	Anulowano otwieranie {name}
 	Cancelled {label}	Anulowano: {label}
 	Esc to cancel	Esc, aby anulować
+	Opened {name}	Otworzono: {name}
 	Opening {name}	Otwieranie {name}
+	Saved {name}	Zapisano: {name}
 	Saving {name}	Zapisywanie {name}
 	A save to {name} is still running; try again when it finishes	Zapisywanie do {name} wciąż trwa; spróbuj ponownie, gdy się zakończy
 	{label} is writing the file and can no longer be cancelled	{label} zapisuje plik i nie można już tego anulować
@@ -2634,6 +2674,9 @@ cameraRaw	Roughness	Chropowatość
 	Structure:	Struktura:
 	Content-Aware Move Tool	Narzędzie Przesunięcie z uwzględnieniem zawartości
 	TIFF Options	Opcje TIFF
+	Targa Options	Opcje Targa
+	24 bits/pixel	24 bity/piksel
+	32 bits/pixel	32 bity/piksel
 	Including layers will increase file size.	Dołączenie warstw zwiększy rozmiar pliku.
 	Discard Layers and Save a Copy	Odrzuć warstwy i zapisz kopię
 	Don't show again	Nie pokazuj ponownie
@@ -3316,6 +3359,19 @@ cameraRaw	Roughness	Chropowatość
 	Domed	Kopuła
 	Domed (Inverted)	Kopuła (odwrócona)
 	Diagonal (Descending)	Przekątna (malejąca)
+	Contour Editor	Edytor konturu
+	Anti-aliased	Wygładzanie
+	Corner	Narożnik
+	Gloss Contour	Kontur połysku
+	Contour	Kontur
+	Cone - Inverted	Stożek - odwrócony
+	Cove - Deep	Zatoka - głęboka
+	Cove - Shallow	Zatoka - płytka
+	Half Round	Półokrągły
+	Ring - Double	Pierścień - podwójny
+	Rolling Slope - Descending	Falisty spadek - malejący
+	Rounded Steps	Zaokrąglone stopnie
+	Sawtooth 1	Piła 1
 	Red Eye Tool	Narzędzie Czerwone oczy
 	Pupil Size	Rozmiar źrenicy
 	Darken Amount	Stopień przyciemnienia
@@ -3451,12 +3507,67 @@ cameraRaw	Roughness	Chropowatość
 	Quick Selection found nothing there	Szybkie zaznaczanie nic tam nie znalazło
 	Object Selection found nothing there — try a tighter rectangle	Zaznaczanie obiektu nic tam nie znalazło — spróbuj ciaśniejszego prostokąta
 	No subject found — try a rectangle around the object	Nie znaleziono obiektu — spróbuj prostokąta wokół obiektu
+	Click the first point or press {key} to close · {del} removes a point · Esc cancels	Kliknij pierwszy punkt lub naciśnij {key}, aby zamknąć · {del} usuwa punkt · Esc anuluje
+	Click, then move along an edge · click to fasten a point · {alt}-click for a straight segment · double-click to close	Kliknij i prowadź wzdłuż krawędzi · kliknij, aby przypiąć punkt · {alt}-klik dla prostego odcinka · kliknij dwukrotnie, aby zamknąć
+	Fill Screen	Wypełnij ekran
+	Follows only edges this close to the pointer ([ and ] change it)	Podąża tylko za krawędziami tak blisko wskaźnika ([ i ] zmieniają wartość)
+	Higher values follow only edges that contrast sharply with their surroundings	Wyższe wartości podążają tylko za krawędziami mocno kontrastującymi z otoczeniem
+	How often fastening points are placed by themselves	Jak często punkty mocujące są stawiane automatycznie
+	Appearance Settings…	Ustawienia wyglądu…
+	Add to favorites	Dodaj do ulubionych
+	Remove from favorites	Usuń z ulubionych
+# File Info ▸ Camera Data (read-only EXIF fields; "Make" is the camera maker, not the verb).
+cameraData	Make	Producent
+cameraData	Model	Model
+cameraData	Date Taken	Data wykonania
+cameraData	Exposure	Czas naświetlania
+cameraData	F-Stop	Przysłona
+cameraData	ISO Speed	Czułość ISO
+cameraData	Focal Length	Ogniskowa
+cameraData	Focal Length (35 mm)	Ogniskowa (35 mm)
+cameraData	Lens	Obiektyw
+# Shared panel docking
+	Activate Panel	Aktywuj panel
+	Change Panel Group	Zmień grupę paneli
+	Change Panel Layout	Zmień układ paneli
+	Close Panel	Zamknij panel
+	Dock Panel	Dokuj panel
+	Float Panel	Panel pływający
+	Move Panel	Przenieś panel
+	Group with	Grupuj z
+	Panel menu	Menu panelu
+	Resize panel window	Zmień rozmiar okna panelu
+	Resize panels	Zmień rozmiar paneli
 	Use Classic Mode	Użyj trybu klasycznego
 	Auto Center Preview	Automatycznie wyśrodkuj podgląd
 	Next Document	Następny dokument
 	Previous Document	Poprzedni dokument
 	W x H x Resolution	Szer. x Wys. x Rozdzielczość
 	Front Image	Obraz na wierzchu
+	Frame Tool	Narzędzie Ramka
+	Create a new rectangular frame	Utwórz nową ramkę prostokątną
+	Create a new elliptical frame	Utwórz nową ramkę eliptyczną
+	Include in playback	Uwzględnij w odtwarzaniu
+	Perspective Crop Tool	Narzędzie Kadrowanie perspektywiczne
+	Show Grid	Pokaż siatkę
+	Drag a box or click four corners · drag the corners onto the edges of a skewed shape · {commit} commits · Esc cancels	Przeciągnij ramkę lub kliknij cztery narożniki · przeciągnij narożniki na krawędzie pochylonego kształtu · {commit} zatwierdza · Esc anuluje
+	Artboard Tool	Narzędzie Obszar roboczy
+	Make Portrait	Ustaw pionowo
+	Make Landscape	Ustaw poziomo
+	Add New Artboard	Dodaj nowy obszar roboczy
+	Freeform Pen Tool	Narzędzie Pióro dowolne
+	Curvature Pen Tool	Narzędzie Pióro krzywizny
+	Curve Fit:	Dopasowanie krzywej:
+	Drag: draw freehand · Release on the start point: close	Przeciągnięcie: rysowanie odręczne · Puszczenie w punkcie początkowym: zamknij
+	Click: smooth point · Double-click: corner · Drag a point: move · Click first point: close · {key} finish	Klik: punkt gładki · Dwuklik: narożnik · Przeciągnięcie punktu: przesuń · Klik w pierwszy punkt: zamknij · {key} zakończ
+	New Crop Preset…	Nowe ustawienie kadrowania…
+	Delete Crop Preset…	Usuń ustawienie kadrowania…
+	Select the crop presets to delete:	Wybierz ustawienia kadrowania do usunięcia:
+	Select the crop presets to delete	Wybierz ustawienia kadrowania do usunięcia
+	Enter a name for the crop preset	Wprowadź nazwę ustawienia kadrowania
+	There is no crop size or ratio to save	Brak rozmiaru lub proporcji kadrowania do zapisania
+	Scale:	Skala:
+	Snap to Origin	Przyciągnij do początku
 	Search settings…	Szukaj ustawień…
 	No matching settings	Brak pasujących ustawień
 # Layer Style > effect order (PhotoCraft: a reorderable stack)
@@ -3464,3 +3575,24 @@ cameraRaw	Roughness	Chropowatość
 	Move Effect Down	Przenieś efekt w dół
 	Reset Order	Przywróć kolejność
 	Stack the effects in Photoshop's order	Ułóż efekty w kolejności Photoshopa
+# Select and Mask view modes (#1754)
+	Onion Skin	Skórka cebuli
+	Marching Ants	Maszerujące mrówki
+	On Black	Na czarnym
+	On White	Na białym
+	On Layers	Na warstwach
+	Show Edge	Pokaż krawędź
+	Show Original	Pokaż oryginał
+	F cycles the views; hold X to see the image	F przełącza widoki; przytrzymaj X, aby zobaczyć obraz
+# Select and Mask Refine Edge Brush (#2972)
+	Refine Edge Brush (R)	Pędzel dopracowania krawędzi (R)
+	Expand Detection Area	Rozszerz obszar wykrywania
+	Restore Original Edge	Przywróć oryginalną krawędź
+	Paint over hair or fur on the image; Alt paints the other mode	Maluj po włosach lub sierści na obrazie; Alt maluje w drugim trybie
+	Clear Brush Strokes	Wyczyść pociągnięcia pędzla
+	Show rulers	Pokaż linijki
+
+# Color Sampler (added with the i18n coverage repair)
+	Click to place · Alt-click or drag off-canvas to remove	Kliknij, aby umieścić · Alt-kliknij lub przeciągnij poza obszar roboczy, aby usunąć
+	No document open	Brak otwartego dokumentu
+	{n} of {max} sample points	{n} z {max} punktów próbkowania

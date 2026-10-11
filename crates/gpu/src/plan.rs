@@ -281,6 +281,19 @@ pub struct Plan<'a> {
     pub root: Slot,
     /// Effect layers in dependency order (a group's inner effect layers come first).
     pub fx: Vec<FxLayer<'a>>,
+    /// Complete root stack units, where only the accumulated backdrop remains live.
+    pub checkpoints: Vec<Checkpoint>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Checkpoint {
+    /// First root layer included after occlusion pruning.
+    pub layer_start: usize,
+    /// Root layers below this boundary (including the complete clipping unit).
+    pub layer_end: usize,
+    /// Resume at this pass with `slot` restored.
+    pub pass_end: usize,
+    pub slot: Slot,
 }
 
 /// Document-level inputs of a plan.
@@ -322,7 +335,7 @@ pub fn plan(doc: &Document) -> Result<Plan<'_>, Unsupported> {
     // Start at the topmost layer that hides everything beneath it (an opaque fill layer): the
     // layers below can't change the result, so they cost no passes or uploads.
     let start = doc.layers.iter().rposition(|l| photocraft_compose::occludes_below(l, doc.mode)).unwrap_or(0);
-    let root = p.stack(doc.layers.get(start..).unwrap_or(&doc.layers), root)?;
+    let root = p.stack_inner(doc.layers.get(start..).unwrap_or(&doc.layers), root, Some(start))?;
     Ok(p.finish(root))
 }
 
@@ -332,6 +345,7 @@ struct Planner<'a> {
     refs: Vec<u32>,
     cx: DocCtx<'a>,
     fx: Vec<FxLayer<'a>>,
+    checkpoints: Vec<Checkpoint>,
 }
 
 /// Coverage source of an effect paint (`kind` in `fs_fxpaint`); flags refine it.
@@ -366,8 +380,8 @@ pub const F_FIRST: u32 = 2048;
 pub const F_CHANNELS: u32 = 4096;
 /// Lab document: Normal blending mixes in CIELAB (`psblend::LAB_MIX`).
 pub const F_LAB: u32 = 65536;
-/// 32-bit float document: Linear Dodge (Add) and Divide don't clip at 1, and the non-separable
-/// modes clip only below 0 (`psblend::HDR`).
+/// 32-bit float document: Add, Divide and Exposure retain values above 1; the non-separable
+/// blend modes clip only below 0 (`psblend::HDR`).
 pub const F_HDR: u32 = 262144;
 /// `Lerp`: A rounded to `p0.x` steps per unit (adjustment results on integer documents).
 pub const F_QUANT: u32 = 32768;
@@ -401,11 +415,11 @@ pub const SHAPE_MAP: usize = usize::MAX;
 
 impl<'a> Planner<'a> {
     fn new(cx: DocCtx<'a>) -> Self {
-        Planner { passes: Vec::new(), free: Vec::new(), refs: Vec::new(), cx, fx: Vec::new() }
+        Planner { passes: Vec::new(), free: Vec::new(), refs: Vec::new(), cx, fx: Vec::new(), checkpoints: Vec::new() }
     }
 
     fn finish(self, root: Slot) -> Plan<'a> {
-        Plan { passes: self.passes, slots: self.refs.len() as u32, root, fx: self.fx }
+        Plan { passes: self.passes, slots: self.refs.len() as u32, root, fx: self.fx, checkpoints: self.checkpoints }
     }
 
     fn alloc(&mut self) -> Slot {
@@ -449,7 +463,11 @@ impl<'a> Planner<'a> {
     }
 
     /// composite_stack: returns the new backdrop (consumes `backdrop`).
-    fn stack(&mut self, layers: &'a [Layer], mut backdrop: Slot) -> Result<Slot, Unsupported> {
+    fn stack(&mut self, layers: &'a [Layer], backdrop: Slot) -> Result<Slot, Unsupported> {
+        self.stack_inner(layers, backdrop, None)
+    }
+
+    fn stack_inner(&mut self, layers: &'a [Layer], mut backdrop: Slot, root_start: Option<usize>) -> Result<Slot, Unsupported> {
         let mut i = 0;
         while i < layers.len() {
             let base = &layers[i];
@@ -470,6 +488,11 @@ impl<'a> Planner<'a> {
                 }
             }
             i = j.max(i + 1);
+            if let Some(start) = root_start
+                && self.refs.iter().enumerate().all(|(slot, &refs)| refs == u32::from(slot == backdrop as usize))
+            {
+                self.checkpoints.push(Checkpoint { layer_start: start, layer_end: start.saturating_add(i), pass_end: self.passes.len(), slot: backdrop });
+            }
         }
         Ok(backdrop)
     }
@@ -1536,8 +1559,21 @@ pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf
             p[0] = [2f32.powf(*exposure), *offset, gamma.max(0.01), transfer_exponent(transfer.for_exposure())];
             (6, p, None)
         }
+        Adjustment::Levels { master, per_channel, space: ToneSpace::Rgb, .. } if depth == photocraft_color::SampleType::F32 => {
+            // Twenty coefficients exceed the sixteen uniform parameters. Store four records
+            // in LUT row 0, read texel-exact by the analytic float Levels kernel.
+            let mut row = [0.0f32; 4096];
+            for (i, ch) in std::iter::once(master).chain(per_channel).enumerate() {
+                let coefficients = [ch.in_black, ch.in_white, ch.gamma.max(0.01), ch.out_black, ch.out_white];
+                row[i * 5..i * 5 + 5].copy_from_slice(&coefficients);
+            }
+            (17, p, Some(vec![row]))
+        }
         // RGB space only (see `adjustment_on_gpu`); the rows are the CPU's channel∘master LUTs.
         Adjustment::Levels { .. } | Adjustment::Curves { .. } => {
+            for (v, identity) in p[0].iter_mut().zip(adjust::float_tone_identity(adj, Some(depth))) {
+                *v = if identity { 1.0 } else { 0.0 };
+            }
             (7, p, Some(adjust::tone_luts_depth(adj, Some(depth)).iter().take(3).map(|t| to_row(t)).collect()))
         }
         Adjustment::HueSaturation { hue, saturation, lightness, colorize, ranges } => {
@@ -1760,6 +1796,36 @@ mod tests {
             let a = Adjustment::ColorLookup { name: "x".into(), lut: Some(std::sync::Arc::new(vec![0.5; 24])), size, tetrahedral: false, dither: false };
             let (kind, _, rows) = adjustment_program(&a, Transfer::Srgb, SampleType::U8);
             assert_eq!((kind, rows.is_none()), (0, true), "size {size}");
+        }
+    }
+
+    #[test]
+    fn root_checkpoints_have_only_one_live_input_and_keep_clips_whole() {
+        for mode in [BlendMode::Normal, BlendMode::PassThrough] {
+            let mut d = Document::with_background("t", Size::new(32, 24), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+            let mut clip = Layer::new("clip", LayerContent::Fill(Fill::Solid(Color::rgba(0.2, 0.3, 0.7, 0.4))));
+            clip.clipped = true;
+            let mut group = Layer::group(
+                "group",
+                vec![
+                    Layer::new("fill", LayerContent::Fill(Fill::Solid(Color::rgba(0.9, 0.1, 0.3, 0.6)))),
+                    Layer::new("invert", LayerContent::Adjustment(Adjustment::Invert)),
+                ],
+            );
+            group.blend = mode;
+            d.layers.extend([group, clip, Layer::new("top", LayerContent::Adjustment(Adjustment::Invert))]);
+            let plan = plan(&d).unwrap();
+            assert_eq!(plan.checkpoints.iter().map(|c| c.layer_end).collect::<Vec<_>>(), vec![1, 3, 4]);
+            for checkpoint in &plan.checkpoints {
+                let mut written = std::collections::HashSet::from([checkpoint.slot]);
+                for pass in &plan.passes[checkpoint.pass_end..] {
+                    for input in [pass.a, pass.b, pass.c, pass.d].into_iter().flatten() {
+                        assert!(written.contains(&input), "a suffix must not need another saved slot: {checkpoint:?}");
+                    }
+                    written.insert(pass.dst);
+                }
+                assert!(written.contains(&plan.root));
+            }
         }
     }
 

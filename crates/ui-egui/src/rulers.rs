@@ -143,11 +143,25 @@ pub fn draw_grid(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, d
     }
 }
 
+pub(crate) fn parse_guide_color(value: &str) -> Option<Color32> {
+    let value = value.strip_prefix('#')?;
+    if value.len() != 6 {
+        return None;
+    }
+    let r = u8::from_str_radix(value.get(0..2)?, 16).ok()?;
+    let g = u8::from_str_radix(value.get(2..4)?, 16).ok()?;
+    let b = u8::from_str_radix(value.get(4..6)?, 16).ok()?;
+    Some(Color32::from_rgb(r, g, b))
+}
+
 pub fn draw_guides(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, doc: &Document) {
     let clip = painter.clip_rect();
     let drag = app.guide_drag;
     let g = &app.session.prefs().guides_grid_and_slices;
-    let (guide, style) = (pref_color(&g.guide_color, Color32::from_rgb(74, 255, 255)), g.guide_style);
+    let preview = crate::guide_layout_ui::preview(app, doc);
+    let guides = preview.as_ref().map(|(guides, _)| guides).unwrap_or(&doc.guides);
+    let (guide, style) =
+        (preview.as_ref().map(|(_, color)| *color).unwrap_or_else(|| pref_color(&g.guide_color, Color32::from_rgb(74, 255, 255))), g.guide_style);
     let line = |vertical: bool, pos: f64, color: Color32| {
         if vertical {
             let x = xf.to_screen(pos as f32, 0.0).x;
@@ -157,13 +171,13 @@ pub fn draw_guides(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform,
             styled_line(painter, pos2(clip.left(), y), pos2(clip.right(), y), Stroke::new(1.0, color), style);
         }
     };
-    if app.ui.extras.guides {
-        for (vertical, list) in [(true, &doc.guides.vertical), (false, &doc.guides.horizontal)] {
+    if app.ui.extras.guides || preview.is_some() {
+        for (vertical, list) in [(true, &guides.vertical), (false, &guides.horizontal)] {
             for (i, p) in list.iter().enumerate() {
                 if drag.is_some_and(|d| d.vertical == vertical && d.index == Some(i)) {
                     continue;
                 }
-                line(vertical, *p as f64, guide);
+                line(vertical, *p, guide);
             }
         }
     }
@@ -182,12 +196,12 @@ pub fn guide_at(app: &PhotocraftApp, x: f64, y: f64) -> Option<(bool, usize)> {
     let doc = &app.session.active()?.doc;
     let tol = 4.0 / app.point_zoom().max(0.01) as f64;
     for (i, g) in doc.guides.vertical.iter().enumerate() {
-        if (*g as f64 - x).abs() <= tol {
+        if (*g - x).abs() <= tol {
             return Some((true, i));
         }
     }
     for (i, g) in doc.guides.horizontal.iter().enumerate() {
-        if (*g as f64 - y).abs() <= tol {
+        if (*g - y).abs() <= tol {
             return Some((false, i));
         }
     }
@@ -245,6 +259,7 @@ pub fn draw_rulers(app: &mut PhotocraftApp, ui: &mut egui::Ui, full: Rect, xf: &
     let whole = unit == photocraft_engine::prefs::Unit::Pixels;
     let label = |v: f64, step: f64| -> String { if step >= 1.0 || whole { format!("{}", v.round() as i64) } else { crate::widgets::fmt_num2(v) } };
     for (vertical, extent) in [(false, size[0]), (true, size[1])] {
+        let p = p.with_clip_rect(if vertical { left } else { top });
         let px_per_unit = unit.to_px(1.0, dpi, extent, ppi).max(1e-9);
         // The top ruler runs along document x, which pixel aspect correction stretches.
         let zoom = if vertical { xf.zoom } else { xf.zoom_x() };
@@ -286,8 +301,8 @@ pub fn draw_rulers(app: &mut PhotocraftApp, ui: &mut egui::Ui, full: Rect, xf: &
     // Pointer position markers.
     if let Some(h) = ui.ctx().pointer_hover_pos().filter(|h| full.contains(*h)) {
         let m = Stroke::new(1.0, t.text);
-        p.line_segment([pos2(h.x, top.top()), pos2(h.x, top.bottom())], m);
-        p.line_segment([pos2(left.left(), h.y), pos2(left.right(), h.y)], m);
+        p.with_clip_rect(top).line_segment([pos2(h.x, top.top()), pos2(h.x, top.bottom())], m);
+        p.with_clip_rect(left).line_segment([pos2(left.left(), h.y), pos2(left.right(), h.y)], m);
     }
     // Drag a new guide out of a ruler; right-click to switch the ruler unit.
     let mut chosen_unit: Option<&'static str> = None;
@@ -324,6 +339,45 @@ pub fn draw_rulers(app: &mut PhotocraftApp, ui: &mut egui::Ui, full: Rect, xf: &
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ruler_ticks_labels_and_pointer_stay_out_of_the_origin_corner() {
+        let mut failures = Vec::new();
+        for theme in crate::theme::ThemeKind::ALL {
+            for (zoom, flip, rotation, width) in [(1.0, false, 0.0, 560.0), (1.0, false, 0.0, 800.0), (0.25, true, 0.0, 560.0), (2.0, false, 30.0, 560.0)] {
+                let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+                app.run("file.new", json!({"width": 256, "height": 128})).unwrap();
+                let full = Rect::from_min_size(pos2(32.0, 32.0), vec2(width - 80.0, 320.0));
+                let corner = Rect::from_min_size(full.min, vec2(RULER, RULER));
+                let builder = egui_kittest::Harness::builder().with_size(vec2(width, 400.0));
+                let mut h = builder.build_ui_state(
+                    move |ui, app| {
+                        let rect = Rect::from_min_max(full.min + vec2(RULER, RULER), full.max);
+                        let xf = ViewXform { rect, zoom, center: [(width - 80.0) / 2.0, 160.0], flip, rotation, aspect: 1.0 };
+                        draw_rulers(app, ui, full, &xf);
+                    },
+                    app,
+                );
+                PhotocraftApp::setup_context(&h.ctx, theme);
+                h.event(egui::Event::PointerMoved(corner.center()));
+                h.run_steps(4);
+                let mut ticks = 0;
+                let mut labels = 0;
+                for shape in &h.output().shapes {
+                    if matches!(shape.shape, egui::Shape::LineSegment { .. } | egui::Shape::Text(_)) {
+                        ticks += usize::from(matches!(shape.shape, egui::Shape::LineSegment { .. }));
+                        labels += usize::from(matches!(shape.shape, egui::Shape::Text(_)));
+                        let visible = shape.shape.visual_bounding_rect().intersect(shape.clip_rect);
+                        if visible.intersect(corner.shrink(0.5)).is_positive() {
+                            failures.push(format!("{theme:?}: zoom={zoom}, flip={flip}, rotation={rotation}, {visible:?}"));
+                        }
+                    }
+                }
+                assert!(ticks > 2 && labels > 0, "rulers still draw ticks and labels");
+            }
+        }
+        assert!(failures.is_empty(), "ruler drawing overlaps the origin corner: {failures:?}");
+    }
 
     #[test]
     fn percentage_grid_spacing_uses_both_canvas_dimensions() {
@@ -411,6 +465,37 @@ mod tests {
         // The context menu applies its pick exactly as the preference pane does.
         app.run("prefs.set", json!({"path": "unitsAndRulers.rulers", "value": "cm"})).unwrap();
         assert_eq!(app.session.prefs().units_and_rulers.rulers, Unit::Centimeters);
+    }
+
+    /// View › Rulers is remembered: the next launch, and every document created or opened in it,
+    /// shows the rulers as last set, on or off (#2918).
+    #[test]
+    fn rulers_open_as_last_set_after_a_restart() {
+        use std::{cell::RefCell, rc::Rc};
+        let saved = Rc::new(RefCell::new(None::<String>));
+        let launch = |saved: &Rc<RefCell<Option<String>>>| {
+            let (load, store) = (saved.clone(), saved.clone());
+            PhotocraftApp::new(
+                photocraft_engine::Session::new(),
+                crate::Services {
+                    load_prefs: Some(Box::new(move || load.borrow().clone())),
+                    save_prefs: Some(Box::new(move |text| {
+                        *store.borrow_mut() = Some(text.to_string());
+                        Ok(())
+                    })),
+                    ..Default::default()
+                },
+            )
+        };
+        for on in [true, false] {
+            let mut app = launch(&saved);
+            assert_eq!(crate::menus::invoke(&mut app, &egui::Context::default(), "view.rulers", json!({})).unwrap(), json!(on));
+            crate::prefs_ui::save_preferences(&mut app).unwrap();
+            let mut next = launch(&saved);
+            next.session.execute("file.new", json!({"width": 20, "height": 10})).unwrap();
+            next.sync_views();
+            assert_eq!(next.ui.extras.rulers, on, "a new document after a restart shows the rulers as last set");
+        }
     }
 
     #[test]

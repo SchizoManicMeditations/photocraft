@@ -524,7 +524,10 @@ impl Writer<'_> {
             "name=\"{}\" visibility=\"{}\" opacity=\"{}\"",
             escape(&layer.name),
             if layer.visible { "visible" } else { "hidden" },
-            layer.opacity.clamp(0.0, 1.0)
+            // OpenRaster has only one opacity for groups. For ordinary isolated groups,
+            // fold fill opacity into that attribute; groups have no pixel payload in which
+            // to bake it as raster layers do (#3048).
+            if matches!(&layer.content, LayerContent::Group(_)) { (layer.opacity * layer.fill_opacity).clamp(0.0, 1.0) } else { layer.opacity.clamp(0.0, 1.0) }
         );
         let op = op_name(layer.blend).unwrap_or_else(|| {
             self.warnings.layer(&layer.name, &format!("the {} blend mode has no OpenRaster equivalent; it was saved as Normal", layer.blend.label()));
@@ -547,7 +550,11 @@ impl Writer<'_> {
             self.warnings.layer(&layer.name, "vector masks are not saved to OpenRaster");
         }
         if layer.fill_opacity < 1.0 {
-            self.warnings.layer(&layer.name, "fill opacity was combined into the layer opacity");
+            if matches!(&layer.content, LayerContent::Group(_)) {
+                self.warnings.layer(&layer.name, "fill opacity was combined into the layer opacity");
+            } else {
+                self.warnings.layer(&layer.name, "fill opacity was applied to the saved layer pixels");
+            }
         }
         attrs
     }

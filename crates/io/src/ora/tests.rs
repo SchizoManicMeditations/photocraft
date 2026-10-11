@@ -346,3 +346,39 @@ fn export_names_route_through_the_crate_entry_point() {
     let back = crate::import("picture.ora", &out.bytes).unwrap();
     assert!(!back.source_read_only);
 }
+
+#[test]
+fn normal_group_fill_opacity_survives_openraster_export() {
+    let mut d = Document::new("group.ora", Size { width: 8, height: 8 }, ColorMode::Rgb, SampleType::U8);
+    let mut surface = Surface::new(PixelFormat::RGBA8);
+    surface.write_interleaved(Rect::from_xywh(0, 0, 8, 8), &[255, 0, 0, 255].repeat(64));
+    let mut group = Layer::group("Folder", vec![Layer::new("Red", LayerContent::Raster(surface))]);
+    group.blend = BlendMode::Normal;
+    group.opacity = 1.0;
+    group.fill_opacity = 0.5;
+    d.layers.push(group);
+
+    let (back, warnings, _) = round_trip(&d);
+    assert!(warnings.iter().any(|w| w.contains("fill opacity was combined")), "{warnings:?}");
+    let imported_group = back.layers.first().unwrap();
+    assert!((imported_group.opacity - 0.5).abs() < 1e-6);
+    assert_eq!(imported_group.fill_opacity, 1.0);
+    let before = photocraft_compose::flatten(&d);
+    let after = photocraft_compose::flatten(&back);
+    for (a, b) in before.px.iter().zip(&after.px) {
+        assert!((a[3] - b[3]).abs() < 1.0 / 255.0 + 1e-6, "alpha: {a:?} vs {b:?}");
+    }
+}
+
+#[test]
+fn group_opacity_and_fill_are_combined_without_affecting_raster_opacity() {
+    let mut d = Document::new("opacity.ora", Size { width: 8, height: 8 }, ColorMode::Rgb, SampleType::U8);
+    let mut group = Layer::group("Folder", vec![block("Child", PixelFormat::RGBA8, 0, 0, 8, 8, 0)]);
+    group.blend = BlendMode::Normal;
+    group.opacity = 0.5;
+    group.fill_opacity = 0.5;
+    d.layers.push(group);
+    let (back, _, _) = round_trip(&d);
+    assert!((back.layers[0].opacity - 0.25).abs() < 1e-6);
+    assert_eq!(back.layers[0].children().unwrap()[0].opacity, 1.0);
+}
