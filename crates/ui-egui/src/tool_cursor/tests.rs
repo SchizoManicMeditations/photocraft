@@ -1,9 +1,9 @@
 use super::*;
-#[cfg(target_os = "windows")]
+#[cfg(not(target_arch = "wasm32"))]
 use egui::{Event, Modifiers, PointerButton, pos2};
-#[cfg(target_os = "windows")]
+#[cfg(not(target_arch = "wasm32"))]
 use egui_kittest::Harness;
-#[cfg(target_os = "windows")]
+#[cfg(not(target_arch = "wasm32"))]
 use serde_json::json;
 
 fn alpha(image: &CustomCursorImage, x: u16, y: u16) -> u8 {
@@ -46,6 +46,16 @@ fn precise_and_tip_centre_crosshairs_have_distinct_hotspots() {
     assert!(alpha(&precise, x + 5, y) > 230);
     let solid = rasterize(Shape::Crosshair { length: 6.0, gap: 0.0 }, 1.0).unwrap();
     assert!(alpha(&solid, solid.hotspot[0], solid.hotspot[1]) > 230);
+}
+
+/// Off Windows a tip stays within what X servers and hardware cursor planes take (256 px); a
+/// larger one falls back to the painted outline. Windows takes far larger cursors.
+#[test]
+fn cursor_bitmaps_stay_within_the_platform_limit() {
+    let fits = |radius: f32| rasterize(Shape::Circle { radius, centre: false }, 1.0).map(|i| i.size[0]);
+    assert!(fits(100.0).is_some_and(|side| side <= 255));
+    assert_eq!(fits(200.0).is_some(), cfg!(target_os = "windows"));
+    assert!(fits(200.0).is_none_or(|side| side <= 2048));
 }
 
 #[test]
@@ -180,7 +190,7 @@ fn lifecycle_clears_sticky_images_and_respects_later_widgets() {
 }
 
 #[test]
-#[cfg(target_os = "windows")]
+#[cfg(not(target_arch = "wasm32"))]
 fn ordinary_brush_cursor_is_not_part_of_the_canvas_draw_list() {
     let ctx = egui::Context::default();
     ctx.add_plugin(CursorLifecycle);
@@ -243,7 +253,7 @@ fn write_cursor_preview() {
     std::fs::write(path, png).unwrap();
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(not(target_arch = "wasm32"))]
 fn harness() -> Harness<'static, crate::PhotocraftApp> {
     let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
@@ -272,7 +282,7 @@ fn harness() -> Harness<'static, crate::PhotocraftApp> {
 }
 
 #[test]
-#[cfg(target_os = "windows")]
+#[cfg(not(target_arch = "wasm32"))]
 fn brush_hover_uses_an_os_bitmap_that_survives_motion_but_not_tool_or_panel_changes() {
     let mut h = harness();
     let initial = h.output().platform_output.cursor_image.clone().expect("brush hover must reach the OS, not the painter");
@@ -290,11 +300,17 @@ fn brush_hover_uses_an_os_bitmap_that_survives_motion_but_not_tool_or_panel_chan
     assert!(h.output().platform_output.cursor_image.is_some());
 
     // Windows has no stock hand (winit maps `Grab` to the move cursor), so the Hand gets the open
-    // hand as a bitmap too (#2196).
+    // hand as a bitmap too (#2196); macOS and the Linux themes draw their own.
     h.state_mut().ui.tool = crate::Tool::Hand;
     h.run_steps(2);
-    let hand = h.output().platform_output.cursor_image.clone().expect("the Hand's open hand reaches the OS as a bitmap");
-    assert_eq!(hand.rgba, rasterize(Shape::Hand { closed: false }, h.ctx.pixels_per_point()).unwrap().rgba);
+    let hand = h.output().platform_output.cursor_image.clone();
+    if cfg!(target_os = "windows") {
+        let hand = hand.expect("the Hand's open hand reaches the OS as a bitmap");
+        assert_eq!(hand.rgba, rasterize(Shape::Hand { closed: false }, h.ctx.pixels_per_point()).unwrap().rgba);
+    } else {
+        assert!(hand.is_none(), "the OS draws the hand");
+        assert_eq!(h.output().platform_output.cursor_icon, CursorIcon::Grab);
+    }
 
     h.state_mut().ui.tool = crate::Tool::Brush;
     h.state_mut().run("prefs.set", json!({"path": "cursors.painting", "value": "standard"})).unwrap();
@@ -304,7 +320,7 @@ fn brush_hover_uses_an_os_bitmap_that_survives_motion_but_not_tool_or_panel_chan
 }
 
 #[test]
-#[cfg(target_os = "windows")]
+#[cfg(not(target_arch = "wasm32"))]
 fn painting_preference_and_zoom_change_the_native_cursor_without_changing_pointer_input() {
     let mut h = harness();
     let image = h.output().platform_output.cursor_image.clone().unwrap();

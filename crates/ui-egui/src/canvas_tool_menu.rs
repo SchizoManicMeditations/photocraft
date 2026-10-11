@@ -1,5 +1,5 @@
-//! Canvas context menus for the selection tools, the Pen, an active Free Transform box, text being
-//! edited with a Type tool and the pasteboard (outside the image).
+//! Canvas context menus for the selection tools, the Pen, the Zoom and Hand tools, an active Free
+//! Transform box, text being edited with a Type tool and the pasteboard (outside the image).
 
 use egui::Context;
 use photocraft_doc::LayerContent;
@@ -24,6 +24,10 @@ pub struct CanvasToolMenu {
     /// Opened outside the image: the pasteboard colour instead of the tool's actions.
     #[serde(default)]
     pub pasteboard: bool,
+    /// The Zoom and Hand tools' view menu: the document point right-clicked, which Zoom In and
+    /// Zoom Out keep under the pointer.
+    #[serde(default)]
+    pub anchor: Option<[f64; 2]>,
     /// Opened while a Type tool edits text: the text and type rows instead of the tool's actions.
     #[serde(default)]
     pub text: bool,
@@ -119,6 +123,24 @@ const ENDS_TYPE_EDIT: [&str; 5] =
 /// The pasteboard menu's Select Custom Color… row.
 pub const PASTEBOARD_PICK: &str = "pasteboard.selectCustomColor";
 
+/// The Zoom and Hand tools' context menu: the zoom steps and fixed zooms of the View menu, plus
+/// the Hand tool's Fill Screen.
+pub const VIEW_MENU: &[Row] = &[
+    Some(("Zoom In", "view.zoomIn")),
+    Some(("Zoom Out", "view.zoomOut")),
+    None,
+    Some(("Fit on Screen", "view.fitOnScreen")),
+    Some(("Fill Screen", FILL_SCREEN)),
+    None,
+    Some(("100%", "view.actualPixels")),
+    Some(("200%", "view.twoHundredPercent")),
+    Some(("Print Size", "view.printSize")),
+];
+
+/// The view menu's Fill Screen row. Photoshop has no View menu command for it, so the menu sets
+/// the view itself.
+pub const FILL_SCREEN: &str = "view.fillScreen";
+
 /// Photoshop's selection-tool context menu with an active selection, in its order. Its Generative
 /// Fill row has no PhotoCraft command and is left out. Rows stay visible and grey out exactly like
 /// their menu-bar twins.
@@ -210,6 +232,11 @@ pub fn applies(tool: Tool) -> bool {
     )
 }
 
+/// Tools whose plain canvas right-click offers the view menu.
+pub fn is_view_tool(tool: Tool) -> bool {
+    matches!(tool, Tool::Zoom | Tool::Hand)
+}
+
 /// The selection tools' rows, with or without an active selection.
 pub fn selection_rows(has_selection: bool) -> &'static [Row] {
     if has_selection { SELECTION_MENU } else { NO_SELECTION_MENU }
@@ -221,6 +248,8 @@ pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
         PASTEBOARD_MENU
     } else if menu.transform {
         TRANSFORM_MENU
+    } else if menu.anchor.is_some() {
+        VIEW_MENU
     } else if menu.text {
         TYPE_EDIT_MENU
     } else if menu.tool == Tool::Pen {
@@ -283,6 +312,7 @@ pub fn open_transform(app: &mut PhotocraftApp, ctx: &Context, pos: [f32; 2]) -> 
         path_name: None,
         transform: true,
         pasteboard: false,
+        anchor: None,
         text: false,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
@@ -323,8 +353,17 @@ pub fn open_pasteboard(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: 
     }
     app.ui.brush_picker = None;
     app.ui.layer_menu = None;
-    app.ui.canvas_tool_menu =
-        Some(CanvasToolMenu { pos, tool, has_selection: false, has_path: false, path_name: None, transform: false, pasteboard: true, text: false });
+    app.ui.canvas_tool_menu = Some(CanvasToolMenu {
+        pos,
+        tool,
+        has_selection: false,
+        has_path: false,
+        path_name: None,
+        transform: false,
+        pasteboard: true,
+        anchor: None,
+        text: false,
+    });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
 }
@@ -347,6 +386,9 @@ pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) 
     // Warp needs a layer or selection box: a lone mask, channel or path keeps the plain box.
     if menu.transform && command == "edit.transform.warp" {
         return app.ui.transform.as_ref().is_some_and(|t| t.warp.is_none() && t.target.is_none() && t.path.is_none());
+    }
+    if menu.anchor.is_some() && command == FILL_SCREEN {
+        return app.session.active().is_some();
     }
     if menu.text {
         return match command {
@@ -402,9 +444,58 @@ pub fn open(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]) -
     let has_selection = app.session.active().is_some_and(|s| s.doc.selection.is_some());
     let has_path = crate::vector_ui::active_path_name(app).is_some() || app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 2);
     let path_name = crate::vector_ui::active_path_name(app);
-    app.ui.canvas_tool_menu = Some(CanvasToolMenu { pos, tool, has_selection, has_path, path_name, transform: false, pasteboard: false, text });
+    app.ui.canvas_tool_menu = Some(CanvasToolMenu { pos, tool, has_selection, has_path, path_name, transform: false, pasteboard: false, anchor: None, text });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
+}
+
+/// Right-click with the Zoom or Hand tool at screen point `pos`, over document point `doc`: the
+/// view menu.
+pub fn open_view(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2], doc: [f64; 2]) -> bool {
+    if !is_view_tool(tool) || !pos.iter().all(|v| v.is_finite()) || !doc.iter().all(|v| v.is_finite()) {
+        return false;
+    }
+    app.ui.brush_picker = None;
+    app.ui.layer_menu = None;
+    app.ui.canvas_tool_menu = Some(CanvasToolMenu {
+        pos,
+        tool,
+        has_selection: false,
+        has_path: false,
+        path_name: None,
+        transform: false,
+        pasteboard: false,
+        anchor: Some(doc),
+        text: false,
+    });
+    crate::canvas_popup::mark_open(ctx, menu_id());
+    true
+}
+
+/// A view menu row. Zoom In and Zoom Out step about the right-clicked point, as a Zoom tool click
+/// does; the other rows run their View menu command.
+fn choose_view(app: &mut PhotocraftApp, ctx: &Context, menu: &CanvasToolMenu, command: &str) -> Result<(), String> {
+    let i = app.session.active_index().ok_or("no document")?;
+    if command == FILL_SCREEN {
+        let v = app.ui.views.get_mut(i).ok_or("no document view")?;
+        v.fit_pending = false;
+        v.fill_pending = true;
+        return Ok(());
+    }
+    let before = app.ui.views.get(i).map(|v| (v.zoom, v.center));
+    crate::menus::invoke(app, ctx, command, json!({}))?;
+    if !matches!(command, "view.zoomIn" | "view.zoomOut") {
+        return Ok(());
+    }
+    let (Some((zoom0, c)), Some(d)) = (before, menu.anchor) else { return Ok(()) };
+    let center_on_point = app.session.prefs().tools.zoom_clicked_point_to_center;
+    let Some(v) = app.ui.views.get_mut(i) else { return Ok(()) };
+    let d = [d[0] as f32, d[1] as f32];
+    // The view scales about the centre, so the point keeps its screen position when its offset
+    // from the centre shrinks (or grows) by the zoom ratio, whatever the rotation or flip.
+    let ratio = zoom0 / v.zoom;
+    v.center = if center_on_point || !ratio.is_finite() { d } else { [d[0] - (d[0] - c[0]) * ratio, d[1] - (d[1] - c[1]) * ratio] };
+    Ok(())
 }
 
 pub fn choose(app: &mut PhotocraftApp, ctx: &Context, command: &str) {
@@ -414,6 +505,8 @@ pub fn choose(app: &mut PhotocraftApp, ctx: &Context, command: &str) {
     }
     let result = if menu.pasteboard {
         choose_pasteboard(app, &menu, command)
+    } else if menu.anchor.is_some() {
+        choose_view(app, ctx, &menu, command)
     } else if menu.text {
         choose_type(app, ctx, command)
     } else if menu.tool == Tool::Pen && !menu.transform {
@@ -576,7 +669,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
 mod tests {
     use super::*;
     use egui::{Modifiers, PointerButton, Pos2, vec2};
-    use egui_kittest::Harness;
+    use egui_kittest::{Harness, kittest::Queryable};
 
     fn app() -> PhotocraftApp {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -958,6 +1051,138 @@ mod tests {
         assert!(open(&mut app, &Context::default(), Tool::MagicWand, [10.0, 10.0]));
         choose(&mut app, &Context::default(), "select.all");
         assert_eq!(app.session.journal.len(), before);
+    }
+
+    #[test]
+    fn view_menu_follows_photoshop_order() {
+        assert_eq!(
+            labels(VIEW_MENU),
+            vec![Some("Zoom In"), Some("Zoom Out"), None, Some("Fit on Screen"), Some("Fill Screen"), None, Some("100%"), Some("200%"), Some("Print Size")]
+        );
+        // Every row but Fill Screen (the Hand tool's options-bar button) is a View menu command.
+        let app = app();
+        let items = crate::menus::menu_items(&app);
+        for (label, id) in VIEW_MENU.iter().flatten().filter(|(_, id)| *id != FILL_SCREEN) {
+            assert!(items.iter().any(|i| i.id == *id), "{label}: unknown command {id}");
+        }
+    }
+
+    fn zoom_app(w: u32, h: u32) -> PhotocraftApp {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": w, "height": h})).unwrap();
+        app
+    }
+
+    fn screen_of(app: &PhotocraftApp, doc: [f32; 2]) -> Pos2 {
+        crate::canvas::ViewXform::active(app).unwrap().to_screen(doc[0], doc[1])
+    }
+
+    #[test]
+    fn zoom_and_hand_right_click_opens_the_view_menu() {
+        for tool in [Tool::Zoom, Tool::Hand] {
+            let mut app = zoom_app(400, 300);
+            app.ui.tool = tool;
+            let mut h = harness(app);
+            let zoom = h.state().ui.views[0].zoom;
+            let inside = screen_of(h.state(), [300.0, 100.0]);
+            right_click(&mut h, inside, Modifiers::NONE);
+            let menu = h.state().ui.canvas_tool_menu.clone().unwrap_or_else(|| panic!("{tool:?}: right-click opens no menu"));
+            assert!(rows(&menu) == VIEW_MENU, "{tool:?}: the view menu");
+            assert_eq!(h.state().ui.views[0].zoom, zoom, "{tool:?}: the right-click alone does not zoom");
+            assert!(entry_enabled(h.state(), &menu, FILL_SCREEN) && entry_enabled(h.state(), &menu, "view.printSize"));
+            // Outside the image the pasteboard colour menu wins, as for the other tools.
+            h.state_mut().ui.canvas_tool_menu = None;
+            let outside = h.state().last_canvas_rect.min + vec2(5.0, 5.0);
+            right_click(&mut h, outside, Modifiers::NONE);
+            assert!(h.state().ui.canvas_tool_menu.as_ref().is_some_and(|m| m.pasteboard), "{tool:?}: pasteboard menu outside");
+        }
+    }
+
+    #[test]
+    fn view_menu_zoom_in_keeps_the_clicked_point_under_the_pointer() {
+        let mut app = zoom_app(400, 300);
+        app.ui.tool = Tool::Zoom;
+        let mut h = harness(app);
+        let zoom = h.state().ui.views[0].zoom;
+        let doc = [300.0, 100.0];
+        let p = screen_of(h.state(), doc);
+        right_click(&mut h, p, Modifiers::NONE);
+        // Chosen in the menu itself: the canvas frame that draws the menu must keep the new view.
+        h.get_by_label("Zoom In").click();
+        h.run_steps(3);
+        assert!(h.state().ui.canvas_tool_menu.is_none());
+        let after = h.state().ui.views[0].zoom;
+        assert_eq!(after, crate::zoom_levels::step(zoom, 1, [400, 300]), "one Zoom In step");
+        let s = screen_of(h.state(), doc);
+        assert!((s - p).length() < 1.0, "the right-clicked point stays put: {s:?} vs {p:?}");
+        assert_eq!(h.state().session.journal.last().map(|(id, _)| id.as_str()), Some("view.zoomIn"));
+        // Zoom Out returns to where it was.
+        right_click(&mut h, p, Modifiers::NONE);
+        h.get_by_label("Zoom Out").click();
+        h.run_steps(3);
+        assert_eq!(h.state().ui.views[0].zoom, zoom);
+        assert!((screen_of(h.state(), doc) - p).length() < 1.0);
+    }
+
+    #[test]
+    fn view_menu_zoom_in_centres_the_clicked_point_with_the_preference() {
+        let mut app = zoom_app(400, 300);
+        app.ui.tool = Tool::Hand;
+        app.run("prefs.set", json!({"path": "tools.zoomClickedPointToCenter", "value": true})).unwrap();
+        let mut h = harness(app);
+        let doc = [300.0, 100.0];
+        let p = screen_of(h.state(), doc);
+        right_click(&mut h, p, Modifiers::NONE);
+        h.get_by_label("Zoom In").click();
+        h.run_steps(3);
+        assert_eq!(h.state().ui.views[0].center, doc);
+    }
+
+    #[test]
+    fn view_menu_fits_fills_and_sets_fixed_zooms() {
+        let mut app = zoom_app(400, 300);
+        app.ui.tool = Tool::Zoom;
+        let mut h = harness(app);
+        let p = screen_of(h.state(), [200.0, 150.0]);
+        let area = crate::rulers::content_rect(h.state(), h.state().last_canvas_rect).size();
+        let ppp = h.state().canvas_ppp();
+        let pick = |h: &mut Harness<'static, PhotocraftApp>, label: &str| {
+            right_click(h, p, Modifiers::NONE);
+            h.get_by_label(label).click();
+            h.run_steps(3);
+            h.state().ui.views[0].zoom
+        };
+        assert_eq!(pick(&mut h, "200%"), 2.0);
+        // Fill Screen: the image covers the whole canvas (one axis can overflow).
+        let fill = pick(&mut h, "Fill Screen") / ppp;
+        assert!(400.0 * fill >= area.x - 1.0 && 300.0 * fill >= area.y - 1.0, "fill {fill} for {area:?}");
+        assert!(400.0 * fill <= area.x + 1.0 || 300.0 * fill <= area.y + 1.0, "fill {fill} for {area:?}");
+        assert_eq!(h.state().ui.views[0].center, [200.0, 150.0]);
+        // Fit on Screen: back to the whole image (capped at 100%, as on open).
+        let fit = pick(&mut h, "Fit on Screen") / ppp;
+        assert!(400.0 * fit <= area.x && 300.0 * fit <= area.y && fit < fill, "fit {fit} fill {fill}");
+    }
+
+    #[test]
+    fn view_menu_needs_finite_points_and_a_view_tool() {
+        let mut app = app();
+        assert!(!open_view(&mut app, &Context::default(), Tool::Brush, [1.0, 1.0], [1.0, 1.0]));
+        assert!(!open_view(&mut app, &Context::default(), Tool::Zoom, [f32::NAN, 1.0], [1.0, 1.0]));
+        assert!(!open_view(&mut app, &Context::default(), Tool::Zoom, [1.0, 1.0], [f64::INFINITY, 1.0]));
+        assert!(app.ui.canvas_tool_menu.is_none());
+        assert!(open_view(&mut app, &Context::default(), Tool::Zoom, [1.0, 1.0], [1.0, 1.0]));
+        let before = app.session.journal.len();
+        choose(&mut app, &Context::default(), "select.all");
+        assert_eq!(app.session.journal.len(), before, "the view menu cannot run another menu's row");
+        // With no document every row is greyed out and choosing one does nothing.
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        assert!(open_view(&mut app, &Context::default(), Tool::Hand, [1.0, 1.0], [1.0, 1.0]));
+        let menu = app.ui.canvas_tool_menu.clone().unwrap();
+        for (_, id) in VIEW_MENU.iter().flatten() {
+            assert!(!entry_enabled(&app, &menu, id), "{id} is greyed out with no document");
+        }
+        choose(&mut app, &Context::default(), FILL_SCREEN);
+        choose(&mut app, &Context::default(), "view.zoomIn");
     }
 
     #[test]

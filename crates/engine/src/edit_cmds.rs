@@ -24,16 +24,17 @@ pub(crate) use paste_target;
 pub struct Clip {
     pub surface: Surface,
     pub bounds: Rect,
-    /// The copied layer itself, when Copy took a whole layer that Paste should recreate rather
-    /// than rasterize (see [`whole_layer`]): a scratch document in the source's colour holding it.
+    /// The copied layer(s), when Copy took whole layers that Paste should recreate rather
+    /// than rasterize (see [`whole_layers`]): a scratch document in the source's colour holding them.
     /// `surface` still holds its pixels, for Paste Into, masks, channels and other apps.
     pub layers: Option<Box<Document>>,
 }
 
 /// Photoshop's layer-based copy (CC 2018 on): with no selection, Copy takes the active layer
 /// whole when it is a smart object (#2428), a type or shape layer, or a group (its whole subtree)
-/// (#2670), so Paste recreates it instead of its pixels. Pixel layers, and several selected
-/// layers, still copy the active layer's pixels.
+/// (#2670), or takes all selected layers when several layers are selected (#3588), so Paste
+/// recreates them instead of their pixels. Pixel layers with one layer selected still copy
+/// the layer's pixels.
 fn takes_whole(d: &crate::DocState, id: LayerId) -> bool {
     d.doc.selection.is_none()
         && d.selected_layers().len() <= 1
@@ -43,9 +44,36 @@ fn takes_whole(d: &crate::DocState, id: LayerId) -> bool {
             .is_some_and(|l| matches!(l.content, LayerContent::Smart(_) | LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Group(_)))
 }
 
-/// The layer Copy takes whole ([`takes_whole`]): a scratch document in the source's colour
-/// holding it.
-fn whole_layer(d: &crate::DocState, id: LayerId) -> Option<Box<Document>> {
+/// The layers Copy takes whole ([`takes_whole`], #3588): a scratch document in the source's colour
+/// holding the copied layer(s).
+fn whole_layers(d: &crate::DocState) -> Option<Box<Document>> {
+    if d.doc.selection.is_some() || !crate::layer_copy_cmds::layered(d.doc.mode) {
+        return None;
+    }
+    let sel = d.selected_layers();
+    if sel.len() > 1 {
+        let ids = crate::layer_multi_cmds::top_level(&d.doc, &sel);
+        if ids.is_empty() {
+            return None;
+        }
+        let doc = &d.doc;
+        let mut copies = Document::new("", doc.size, doc.mode, doc.depth);
+        copies.icc_profile = doc.icc_profile.clone();
+        copies.resolution_dpi = doc.resolution_dpi;
+        copies.patterns = doc.patterns.clone();
+        for id in &ids {
+            if let Some(src) = doc.layer(*id) {
+                let mut l = src.clone();
+                // A copy of the Background layer arrives as an ordinary layer (#2777).
+                if crate::extra_cmds::is_background(src) && doc.layers.first().is_some_and(|b| b.id == *id) {
+                    l.locks = Default::default();
+                }
+                copies.layers.push(l);
+            }
+        }
+        return Some(Box::new(copies));
+    }
+    let id = d.active_layer?;
     let l = d.doc.layer(id).filter(|_| takes_whole(d, id))?;
     let doc = &d.doc;
     let mut copies = Document::new("", doc.size, doc.mode, doc.depth);
@@ -85,10 +113,13 @@ fn has_layer_pixels(s: &Session) -> std::result::Result<(), String> {
     active_layer(s)?.surface().map(|_| ()).ok_or_else(|| "the active layer has no pixels".into())
 }
 
-/// Copy: a targeted alpha channel (#2307), a layer with pixels, or one taken whole (a group with
-/// no selection, #2670).
+/// Copy: a targeted alpha channel (#2307), a layer with pixels, several selected layers (#3588),
+/// or one taken whole (a group with no selection, #2670).
 fn can_copy(s: &Session) -> std::result::Result<(), String> {
     if crate::channel_clip::copies_alpha_channel(s) {
+        return Ok(());
+    }
+    if s.active().is_some_and(|d| d.doc.selection.is_none() && d.selected_layers().len() > 1 && crate::layer_copy_cmds::layered(d.doc.mode)) {
         return Ok(());
     }
     has_layer_pixels(s).or_else(|e| s.active().and_then(|d| d.active_layer.filter(|id| takes_whole(d, *id))).map(|_| ()).ok_or(e))
@@ -165,21 +196,23 @@ fn copy(s: &mut Session, merged: bool) -> Result<Value> {
     let canvas = d.doc.bounds();
     let clip = if merged {
         lift(&merged_surface(&d.doc), d.doc.selection.as_ref(), canvas)?
+    } else if let Some(copies) = whole_layers(d) {
+        let layers = Some(copies.clone());
+        if copies.layers.len() == 1
+            && let Some(surf) = copies.layers.first().and_then(Layer::surface)
+        {
+            Clip { layers, ..lift(surf, d.doc.selection.as_ref(), canvas)? }
+        } else {
+            let mut shown = (*copies).clone();
+            for l in &mut shown.layers {
+                l.visible = true;
+            }
+            Clip { layers, ..lift(&merged_surface(&shown), None, canvas)? }
+        }
     } else {
         let id = d.active_layer.ok_or(EngineError::Other("no active layer".into()))?;
-        let layers = whole_layer(d, id);
-        match (d.doc.layer(id).and_then(Layer::surface), &layers) {
-            (Some(surf), _) => Clip { layers, ..lift(surf, d.doc.selection.as_ref(), canvas)? },
-            // A group has no pixels of its own: the clipboard pixels are what it shows.
-            (None, Some(copies)) => {
-                let mut shown = (**copies).clone();
-                for l in &mut shown.layers {
-                    l.visible = true;
-                }
-                Clip { layers, ..lift(&merged_surface(&shown), None, canvas)? }
-            }
-            (None, None) => return Err(EngineError::Other("the active layer has no pixels".into())),
-        }
+        let surf = d.doc.layer(id).and_then(Layer::surface).ok_or(EngineError::Other("the active layer has no pixels".into()))?;
+        lift(surf, d.doc.selection.as_ref(), canvas)?
     };
     if clip.bounds.is_empty() {
         return Err(EngineError::Other("Could not copy: the selected area is empty".into()));
@@ -249,11 +282,12 @@ fn paste(s: &mut Session, p: &Value, in_place: bool) -> Result<Value> {
     Ok(json!({"layer": id.0, "offset": [dx, dy]}))
 }
 
-/// Paste of a whole copied layer ([`whole_layer`]): fresh copies (a group's children too),
+/// Paste of whole copied layers ([`whole_layers`]): fresh copies (a group's children too),
 /// converted to the document's colour, moved as the pixels would be, above the active layer. A pasted smart object gets its
 /// own contents, independent of the copied one (as across documents).
 fn paste_layers(s: &mut Session, layers: &Document, dx: i32, dy: i32) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
+    let before = d.doc.clone();
     let mut copies = layers.clone();
     for l in &mut copies.layers {
         *l = l.duplicate();
@@ -261,15 +295,22 @@ fn paste_layers(s: &mut Session, layers: &Document, dx: i32, dy: i32) -> Result<
     crate::layer_copy_cmds::adapt_copies(s, &mut copies, &d.doc)?;
     crate::layer_copy_cmds::translate_copies(&mut copies, dx, dy);
     let patterns: Vec<_> = copies.patterns.iter().filter(|pat| !d.doc.patterns.iter().any(|q| q.id == pat.id)).cloned().collect();
-    let id = s.edit("Paste", |doc, active| {
+    let (new_ids, active_id) = s.edit("Paste", |doc, active| {
         doc.patterns.extend(patterns);
+        let mut new_ids = Vec::with_capacity(copies.layers.len());
         for l in copies.layers {
-            *active = Some(doc.insert_above(*active, l));
+            let nid = doc.insert_above(*active, l);
+            *active = Some(nid);
+            new_ids.push(nid);
         }
         doc.selection = None;
-        active.ok_or(EngineError::Other("nothing to paste".into()))
+        let last = active.ok_or(EngineError::Other("nothing to paste".into()))?;
+        Ok((new_ids, last))
     })?;
-    Ok(json!({"layer": id.0, "offset": [dx, dy]}))
+    crate::layer_multi_cmds::note_insert(s, &before);
+    let last = new_ids.last().copied();
+    crate::layer_multi_cmds::reselect(s, new_ids.clone(), last);
+    Ok(json!({"layer": active_id.0, "layers": new_ids.iter().map(|l| l.0).collect::<Vec<_>>(), "offset": [dx, dy]}))
 }
 
 /// How far a paste moves the clipboard pixels: not at all in place (or when they lie on the
@@ -1305,6 +1346,103 @@ mod tests {
         assert!(matches!(shape.content, LayerContent::Shape(_)), "the shape stays a shape");
         assert_ne!(shape.id, src.children[0].id, "fresh ids");
         assert_eq!(shape.surface().map(|c| c.format().sample), Some(s.active().unwrap().doc.depth), "converted to 16 bits");
+    }
+
+    /// #3588: with no selection and several layers selected, Copy takes every selected layer
+    /// whole and Paste recreates them in order, with all pasted layers selected, and undoable
+    /// in one step.
+    #[test]
+    fn copy_paste_multiple_selected_layers_in_same_document() {
+        let mut s = session();
+        s.execute("type.create", json!({"text": "Hello", "size": 24, "x": 10, "y": 30})).unwrap();
+        let type_id = s.active().unwrap().active_layer.unwrap();
+        s.execute("shape.create", json!({"kind": "rect", "rect": [15, 15, 30, 20], "fill": "#00ff00"})).unwrap();
+        let shape_id = s.active().unwrap().active_layer.unwrap();
+        // Select both the type and shape layers.
+        s.active_mut().unwrap().selected_layers = vec![type_id, shape_id];
+        assert_eq!(s.active().unwrap().selected_layers().len(), 2);
+        assert!(s.is_enabled("edit.copy"));
+
+        // Copy both layers and paste.
+        s.execute("edit.copy", json!({})).unwrap();
+        let paste_res = s.execute("edit.paste", json!({})).unwrap();
+        let pasted_layers = paste_res["layers"].as_array().expect("array of pasted layers");
+        assert_eq!(pasted_layers.len(), 2, "both layers were pasted");
+
+        let current_sel = s.active().unwrap().selected_layers();
+        assert_eq!(current_sel.len(), 2, "both pasted layers are selected in the session");
+        assert_eq!(current_sel[0].0, pasted_layers[0].as_u64().unwrap());
+        assert_eq!(current_sel[1].0, pasted_layers[1].as_u64().unwrap());
+
+        let doc = &s.active().unwrap().doc;
+        let pasted_type = doc.layer(LayerId(pasted_layers[0].as_u64().unwrap())).unwrap();
+        let pasted_shape = doc.layer(LayerId(pasted_layers[1].as_u64().unwrap())).unwrap();
+        assert!(matches!(pasted_type.content, LayerContent::Text(_)), "type layer preserved");
+        assert!(matches!(pasted_shape.content, LayerContent::Shape(_)), "shape layer preserved");
+        assert_ne!(pasted_type.id, type_id);
+        assert_ne!(pasted_shape.id, shape_id);
+
+        // One undo removes both pasted layers.
+        s.execute("edit.undo", json!({})).unwrap();
+        let doc_after_undo = &s.active().unwrap().doc;
+        assert!(doc_after_undo.layer(LayerId(pasted_layers[0].as_u64().unwrap())).is_none());
+        assert!(doc_after_undo.layer(LayerId(pasted_layers[1].as_u64().unwrap())).is_none());
+    }
+
+    /// #3588: Copying multiple selected layers from one document and pasting into another.
+    #[test]
+    fn copy_paste_multiple_selected_layers_across_documents() {
+        let mut s = session();
+        s.execute("type.create", json!({"text": "World", "size": 20, "x": 10, "y": 25})).unwrap();
+        let type_id = s.active().unwrap().active_layer.unwrap();
+        s.execute("shape.create", json!({"kind": "rect", "rect": [10, 10, 40, 20], "fill": "#ff0000"})).unwrap();
+        let shape_id = s.active().unwrap().active_layer.unwrap();
+        // Select both layers.
+        s.active_mut().unwrap().selected_layers = vec![type_id, shape_id];
+        s.execute("edit.copy", json!({})).unwrap();
+
+        // Create a second document with 16-bit depth.
+        s.execute("file.new", json!({"width": 80, "height": 60, "depth": 16})).unwrap();
+        assert_eq!(s.active().unwrap().doc.layers.len(), 1, "only Background initially");
+
+        // Paste into the second document.
+        let paste_res = s.execute("edit.pasteSpecial.pasteInPlace", json!({})).unwrap();
+        let pasted_layers = paste_res["layers"].as_array().expect("array of pasted layers");
+        assert_eq!(pasted_layers.len(), 2, "both layers were pasted into the second document");
+
+        let dest_doc = &s.active().unwrap().doc;
+        assert_eq!(dest_doc.layers.len(), 3, "Background + 2 pasted layers");
+        let p_type = dest_doc.layer(LayerId(pasted_layers[0].as_u64().unwrap())).unwrap();
+        let p_shape = dest_doc.layer(LayerId(pasted_layers[1].as_u64().unwrap())).unwrap();
+        assert!(matches!(p_type.content, LayerContent::Text(_)));
+        assert!(matches!(p_shape.content, LayerContent::Shape(_)));
+
+        // Both pasted layers should be selected in the active document.
+        let sel = s.active().unwrap().selected_layers();
+        assert_eq!(sel.len(), 2);
+        assert_eq!(sel[0].0, pasted_layers[0].as_u64().unwrap());
+        assert_eq!(sel[1].0, pasted_layers[1].as_u64().unwrap());
+    }
+
+    /// When several layers are selected but a marquee selection exists, Copy takes pixels
+    /// of the active layer only, matching Photoshop.
+    #[test]
+    fn copy_multiple_layers_with_marquee_selection_copies_pixels_only() {
+        let mut s = session();
+        s.execute("shape.create", json!({"kind": "rect", "rect": [10, 10, 40, 20], "fill": "#ff0000"})).unwrap();
+        let shape1 = s.active().unwrap().active_layer.unwrap();
+        s.execute("type.create", json!({"text": "A", "size": 20, "x": 10, "y": 20})).unwrap();
+        let type1 = s.active().unwrap().active_layer.unwrap();
+        s.active_mut().unwrap().selected_layers = vec![shape1, type1];
+
+        // Create a marquee selection.
+        s.execute("select.rect", json!({"x": 5, "y": 5, "width": 20, "height": 20})).unwrap();
+        s.execute("edit.copy", json!({})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+
+        // Paste should paste as a single raster layer, not the whole type or shape layers.
+        s.execute("edit.paste", json!({})).unwrap();
+        assert!(matches!(active_content(&s), LayerContent::Raster(_)), "marquee selection copies pixels");
     }
 
     #[test]

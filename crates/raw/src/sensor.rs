@@ -225,6 +225,11 @@ pub(crate) fn read_plane(t: &Tiff, ifd: &Ifd, limits: &Limits, layout: JpegLayou
         let s = &segments[i];
         let rows = s.h.min(height - s.y);
         let src = t.bytes(s.offset, s.len).ok_or_else(|| RawError::malformed("raw data lies outside the file"))?;
+        // Every branch below sizes at least one buffer from the segment's own geometry, which
+        // the file declares independently of the image: a tile can be far larger than the image
+        // it belongs to, so the image check above does not bound those buffers. Charge the
+        // segment itself before decoding it (#2925).
+        limits.check(s.w as u64, s.h as u64, samples as u64 * 2)?;
         match compression {
             1 => unpack(src, s.w, rows, samples, bits, le),
             8 => {
@@ -280,10 +285,15 @@ pub(crate) fn read_plane(t: &Tiff, ifd: &Ifd, limits: &Limits, layout: JpegLayou
                 // The 8-bit samples widen to the document's 16-bit range (0xFF -> 0xFFFF).
                 Ok(decoded.into_iter().map(|b| u16::from(b) * 257).collect())
             }
+            // Compression 7 (lossless JPEG): the frame the entropy stream declares is capped
+            // by the budget, not only by the segment, and the `Quads` scatter buffer below
+            // comes out of the same budget. `max_alloc` counts bytes, a sample is two.
             _ => {
                 let need = s.w * rows * samples;
-                let max = s.w.saturating_mul(s.h).saturating_mul(samples).saturating_mul(4);
-                let (f, v) = ljpeg::decode(src, max)?;
+                let scatter = if layout == JpegLayout::Quads && samples == 1 { s.w.saturating_mul(s.h).saturating_mul(2) as u64 } else { 0 };
+                let budget = usize::try_from(limits.max_alloc.saturating_sub(scatter) / 2).unwrap_or(usize::MAX);
+                let geom = s.w.saturating_mul(s.h).saturating_mul(samples).saturating_mul(4);
+                let (f, v) = ljpeg::decode(src, geom.min(budget))?;
                 if v.len() < need {
                     return Err(RawError::malformed("lossless JPEG tile is smaller than its tile"));
                 }
