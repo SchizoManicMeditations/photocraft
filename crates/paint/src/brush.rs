@@ -485,6 +485,10 @@ pub struct BrushSettings {
     pub flip_y: bool,
     /// Pencil: no anti-aliasing (coverage is 0 or 1).
     pub aliased: bool,
+    /// With `aliased`, a square tip: every pixel of the dab's whole-pixel square
+    /// ([`crate::grid_square`]), whatever its angle or roundness. The Eraser's Block mode.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub square: bool,
     // --- dynamics sections ---
     pub shape_dynamics: ShapeDynamics,
     pub scattering: Scattering,
@@ -533,6 +537,7 @@ impl Default for BrushSettings {
             flip_x: false,
             flip_y: false,
             aliased: false,
+            square: false,
             shape_dynamics: ShapeDynamics::default(),
             scattering: Scattering::default(),
             texture: Texture::default(),
@@ -642,4 +647,8 @@ pub struct BrushPreset {
     /// Preset group (folder) in the Brushes panel, e.g. "General" or an imported file's name.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub group: String,
+    /// Folders inside `group`, outermost first (empty = directly in the group), like the nested
+    /// folders of Photoshop's Brushes panel; e.g. an imported `.abr` file's own folders.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub folder: Vec<String>,
 }

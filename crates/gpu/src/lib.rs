@@ -170,6 +170,9 @@ struct Resident {
     format: PixelFormat,
     tiles: HashMap<TileCoord, Arc<Tile>>,
     default_nonzero: bool,
+    /// Bit pattern of the surface's default pixel when the texture was filled. Tiles the surface
+    /// doesn't store hold it, so a changed default (Invert, Fill) makes the texture stale.
+    default_bits: Vec<u32>,
     doc: DocId,
     last_used: u64,
     /// Cell visit that last used it (least recently used pages are evicted first).
@@ -388,6 +391,9 @@ pub struct Compositor {
     /// Effect temporaries (R32F, region sized) and the frame they were last used.
     temps: Vec<(Tex, u64)>,
     patterns: HashMap<String, (u64, Tex)>,
+    /// The colour mode of the document being encoded: patterns paint in it
+    /// (`photocraft_compose::pattern::pattern_rgba`).
+    pattern_mode: photocraft_color::ColorMode,
     /// Texture side limit the paging is planned for (the device's, or smaller in tests).
     max_dim: u32,
     /// The device's real texture side limit.
@@ -590,6 +596,7 @@ impl Compositor {
             fx: HashMap::new(),
             temps: Vec::new(),
             patterns: HashMap::new(),
+            pattern_mode: photocraft_color::ColorMode::Rgb,
             max_dim: 0,
             device_max: device.limits().max_texture_dimension_2d,
             page: PAGE,
@@ -853,6 +860,7 @@ impl Compositor {
         let region = region.intersect(&canvas);
         let plan = plan(doc)?;
         self.check_fx(doc, &plan)?;
+        self.pattern_mode = doc.pixel_format().mode;
         let mut stats = Stats { passes: plan.passes.len(), slots: plan.slots, ..Default::default() };
         if region.is_empty() {
             return Ok(stats);
@@ -1238,7 +1246,12 @@ impl Compositor {
         let format = surface.format();
         let kind = TexKind::for_surface(key.1, format);
         let cmyk = if format.mode == photocraft_color::ColorMode::Cmyk { self.cmyk } else { 0 };
-        let stale = self.residents.get(&key).is_none_or(|r| r.region != region || r.kind != kind || r.format != format || r.cmyk != cmyk);
+        let default_pixel = surface.default_pixel();
+        let default_bits: Vec<u32> = default_pixel.iter().map(|v| v.to_bits()).collect();
+        let stale = self
+            .residents
+            .get(&key)
+            .is_none_or(|r| r.region != region || r.kind != kind || r.format != format || r.cmyk != cmyk || r.default_bits != default_bits);
         if stale {
             let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("pc_compose_layer"),
@@ -1251,8 +1264,9 @@ impl Compositor {
                 view_formats: &[],
             });
             let view = texture.create_view(&Default::default());
-            let default_nonzero = surface.default_pixel().iter().any(|v| *v != 0.0);
-            let mut r = Resident { texture, view, region, kind, format, tiles: HashMap::new(), default_nonzero, doc, last_used: 0, stamp: 0, cmyk };
+            let default_nonzero = default_pixel.iter().any(|v| *v != 0.0);
+            let mut r =
+                Resident { texture, view, region, kind, format, tiles: HashMap::new(), default_nonzero, default_bits, doc, last_used: 0, stamp: 0, cmyk };
             // A new texture starts zeroed: write the tiles that are present, and the default pixel
             // where they are missing if it isn't zero. Coordinates sharing a tile (a solid fill,
             // the default) take one upload and GPU copies (#1774).
@@ -1322,20 +1336,21 @@ impl Compositor {
         Some((key, [region.x0, region.y0, region.width() as i32, region.height() as i32]))
     }
 
-    /// Premultiplied RGBA32F texture of a pattern (cached by pixel identity).
+    /// Premultiplied RGBA32F texture of a pattern as it paints in the document's mode (cached by
+    /// pixel identity and mode).
     fn pattern_view(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, pat: &Pattern) -> wgpu::TextureView {
         let fp = pat.surface.tiles().fold((pat.width as u64) << 32 | pat.height as u64, |acc, (c, t)| {
             acc.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ (Arc::as_ptr(t) as usize as u64) ^ ((c.tx as u64) << 20) ^ c.ty as u64
         });
-        let key = format!("{}\u{0}{}", pat.id, pat.name);
+        let mode = self.pattern_mode;
+        let key = format!("{}\u{0}{}\u{0}{mode:?}", pat.id, pat.name);
         if let Some((f, t)) = self.patterns.get(&key)
             && *f == fp
         {
             return t.view.clone();
         }
         let (w, h) = (pat.width, pat.height);
-        let mut px = vec![[0.0f32; 4]; w as usize * h as usize];
-        pat.surface.read_rgba_into(pat.rect(), &mut px);
+        let px = photocraft_compose::pattern::pattern_rgba(pat, mode);
         let bytes: Vec<u8> = px.iter().flat_map(|q| [q[0] * q[3], q[1] * q[3], q[2] * q[3], q[3]]).flat_map(f32::to_le_bytes).collect();
         let t = Tex::new(device, "pc_pattern", w, h, wgpu::TextureFormat::Rgba32Float, wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST);
         queue.write_texture(
@@ -1645,7 +1660,7 @@ fn op_words(p: &plan::Pass<'_>, tex: Option<[i32; 4]>, mask: Option<[i32; 4]>, m
         F(p.opacity),
         F(density),
         F(mdefault),
-        F(0.0),
+        F(p.fill),
         I(to[0]),
         I(to[1]),
         I(ts[0]),
